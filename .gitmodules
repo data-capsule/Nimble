@@ -1,0 +1,3 @@
+[submodule "experiments/wrk2"]
+	path = experiments/wrk2
+	url = https://github.com/giltene/wrk2.git

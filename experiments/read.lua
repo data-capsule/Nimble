@@ -9,6 +9,8 @@ local sha = require("sha2")
 time = math.floor(socket.gettime() * 1000)
 math.randomseed(time)
 uuid.randomseed(time)
+uuid.rng.math_randomseed(time)
+uuid.set_rng(uuid.rng.math_random())
 
 local function fromhex(str)
     return (str:gsub('..', function (cc)
@@ -26,6 +28,8 @@ content = {
 }
 
 body = json.encode(content)
+must_log = false
+log_file = io.open("/tmp/request.txt", "a")
 
 request = function()
   local addr = endpoint_addr .. handle
@@ -43,6 +47,10 @@ request = function()
     local headers = {}
     headers["Content-Type"] = "application/json"
     req = wrk.format(method, addr, headers, body)
+  end
+  if must_log then
+    log_file:write(req .. "\n")
+    log_file:flush()
   end
   return req
 end

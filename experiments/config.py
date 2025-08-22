@@ -1,4 +1,4 @@
-LOCAL_RUN = False # set to True if you want to run all nodes and experiments locally. Else set to False.
+LOCAL_RUN = True # set to True if you want to run all nodes and experiments locally. Else set to False.
                   # If set to True, you can ignore all the IP addresses and SSH stuff below. They won't be used.
                   # You cannot run any of the Azure table experiments locally.
 
@@ -76,14 +76,14 @@ PORT_SGX_ENDORSER_3 = "9093"
 # wrk2 executable, and the directory where the logs and results should be stored.
 # We assume all of the machines have the same path.
 
-NIMBLE_PATH = "/home/user/nimble"
+NIMBLE_PATH = "/home/ubuntu/Nimble"
 NIMBLE_BIN_PATH = NIMBLE_PATH + "/target/release"
 WRK2_PATH = NIMBLE_PATH + "/experiments/wrk2"
 OUTPUT_FOLDER = NIMBLE_PATH + "/experiments/results"
 
 # Set the SSH user for the machines that we will be connecting to.
-SSH_USER = "user"                       # this is the username in the machine we'll connect to (e.g., user@IP)
-SSH_KEY_PATH = "/home/user/.ssh/id_rsa" # this is the path to private key in the current machine where you'll run this script
+SSH_USER = "ubuntu"                       # this is the username in the machine we'll connect to (e.g., user@IP)
+SSH_KEY_PATH = "/home/ubuntu/.ssh/id_ed25519" # this is the path to private key in the current machine where you'll run this script
 
 # To use Azure storage, you need to set the STORAGE_ACCOUNT_NAME and STORAGE_MASTER_KEY environment variables
 # with the corresponding values that you get from Azure.

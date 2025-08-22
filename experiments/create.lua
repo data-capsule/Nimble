@@ -10,6 +10,8 @@ local sha = require("sha2")
 time = math.floor(socket.gettime() * 1000)
 math.randomseed(time)
 uuid.randomseed(time)
+uuid.rng.math_randomseed(time)
+uuid.set_rng(uuid.rng.math_random())
 
 local thread_count = 1
 
@@ -44,6 +46,9 @@ end
 ledger_id = 0
 
 handles = {}
+must_log = false
+
+log_file = io.open("/tmp/request.txt", "a")
 
 request = function()
     local hash = sha.sha256(tid.."counter"..ledger_id)
@@ -59,5 +64,11 @@ request = function()
 
     local body = json.encode(param)
     headers["Content-Type"] = "application/json"
+
+    if must_log then
+      log_file:write(wrk.format(method, endpoint_addr, headers, body) .. "\n")
+      log_file:flush()
+    end
+
     return wrk.format(method, endpoint_addr, headers, body)
 end

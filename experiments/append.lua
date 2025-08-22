@@ -10,6 +10,8 @@ local sha = require("sha2")
 time = math.floor(socket.gettime() * 1000)
 math.randomseed(time)
 uuid.randomseed(time)
+uuid.rng.math_randomseed(time)
+uuid.set_rng(uuid.rng.math_random())
 
 local thread_count = 1
 
@@ -53,6 +55,10 @@ counters = {}
 headers = {}
 headers["Content-Type"] = "application/json"
 
+
+must_log = false
+log_file = io.open("/tmp/request.txt", "a")
+
 request = function()
   local handle = base64url.encode(fromhex(sha.sha256(tid.."counter"..ledger_id)))
   local addr = endpoint_addr .. handle
@@ -70,5 +76,9 @@ request = function()
     ExpectedCounter = counter,
   }
   local body = json.encode(content)
+  if must_log then
+    log_file:write(wrk.format(method, addr, headers, body) .. "\n")
+    log_file:flush()
+  end
   return wrk.format(method, addr, headers, body)
 end
