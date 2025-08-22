@@ -29,3 +29,11 @@ md5 = "0.7.0"
 http = "0.2.6"
 base64-url = "1.4.13"
 fs2 = "0.4.3"
+tonic = "0.8.2"
+prost = "0.11.0"
+
+
+
+[build-dependencies]
+tonic-build = "0.8.2"
+prost-build = "0.11.0"

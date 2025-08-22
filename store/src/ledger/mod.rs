@@ -5,6 +5,7 @@ pub mod azure_table;
 pub mod filestore;
 pub mod in_memory;
 pub mod mongodb_cosmos;
+pub mod psl_storage;
 
 use crate::errors::LedgerStoreError;
 

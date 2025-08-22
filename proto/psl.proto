@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package psl_proto;
+
+service PSLStorageCall {
+    rpc StoreRemote(StoreRemoteReq) returns (StoreRemoteResp);
+    rpc ReadRemote(ReadRemoteReq) returns (ReadRemoteResp);
+}
+
+message StoreRemoteReq {
+    uint64 origin_id = 1;
+    bytes data = 2;
+    uint64 seq_num = 3;
+}
+
+message StoreRemoteResp {
+    bool success = 1;
+}
+
+message ReadRemoteReq {
+    uint64 origin_id = 1;
+    uint64 seq_num = 2;
+}
+
+message ReadRemoteResp {
+    bytes data = 1;
+}
