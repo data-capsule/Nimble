@@ -1249,7 +1249,7 @@ impl CustomSerde for Receipt {
 
   fn from_bytes(bytes: &[u8]) -> Result<Receipt, CustomSerdeError> {
     if bytes.len() != Receipt::num_bytes() {
-      eprintln!("bytes len {} is incorrect for receipt", bytes.len());
+      eprintln!("bytes len {} is incorrect for receipt. Correct length is {}", bytes.len(), Receipt::num_bytes());
       return Err(CustomSerdeError::IncorrectLength);
     }
 

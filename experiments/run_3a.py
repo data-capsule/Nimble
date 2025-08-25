@@ -11,8 +11,8 @@ dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
 EXP_NAME = "fig-3a-" + dt_string
 NUM_ITERATIONS = 1
-# LOAD = [5000]  #[5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
-LOAD = [5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
+LOAD = [5000]  #[5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
+# LOAD = [5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
 
 def run_3a(time, op, out_folder):
     # Run client (wrk2)
@@ -34,8 +34,8 @@ out_folder = OUTPUT_FOLDER + "/" + EXP_NAME + "/"
 setup_output_folder(SSH_IP_CLIENT, out_folder)
 
 for i in range(NUM_ITERATIONS):
-    teardown(False)
-    setup("", False)
+    # teardown(False)
+    # setup("", False)
 
     # Creates the ledgers so that we can append to them
     operation = "create"

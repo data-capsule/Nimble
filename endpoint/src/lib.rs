@@ -148,7 +148,10 @@ impl Connection {
         index: index as u64,
       })
       .await
-      .map_err(|_e| EndpointError::FailedToReadViewLedger)?
+      .map_err(|_e| {
+        eprintln!("Failed to read a ledger {:?}", _e);
+        EndpointError::FailedToReadViewLedger
+      })?
       .into_inner();
     Ok((block, receipts))
   }
@@ -458,7 +461,7 @@ impl EndpointState {
           }
         };
         if res.is_err() {
-          eprintln!("failed to increment a counter {:?}", res);
+          eprintln!("failed to increment a counter {:?}. Handle: {:?}", res, handle);
           return Err(EndpointError::FailedToVerifyIncrementedCounter);
         }
       }

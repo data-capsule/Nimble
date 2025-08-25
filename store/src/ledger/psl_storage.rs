@@ -34,15 +34,18 @@ impl PSLStorageConnector {
             },
         };
 
-        Ok(Self {
+        let res = Self {
             connection: Arc::new(Mutex::new(connection)),
-            view_handle,
+            view_handle: view_handle.clone(),
             tail_index: Arc::new(RwLock::new(HashMap::new())),
             handle_counter: AtomicU64::new(0),
             handle_map: Arc::new(RwLock::new(HashMap::new())),
             receipt_index_map: Arc::new(RwLock::new(HashMap::new())),
             receipt_index_counter: Arc::new(RwLock::new(HashMap::new())),
-        })
+        };
+
+        res.create_ledger(&view_handle, Block::new(&[0; 0])).await?;
+        Ok(res)
     }
 
 
@@ -60,6 +63,10 @@ impl PSLStorageConnector {
                 return None;
             }
         };
+
+        if create_if_not_exists {
+            println!("handle_id: {}, handle: {:?}", if is_for_receipts { handle_id + 1 } else { handle_id }, handle);
+        }
 
         if is_for_receipts {
             Some(handle_id + 1)
@@ -138,10 +145,14 @@ impl PSLStorageConnector {
         handle: &Handle,
         idx: usize,
     ) -> Result<LedgerEntry, LedgerStoreError> {
-        let seq_num = idx + 1;
-        let mut entry = self._read_remote(handle, seq_num).await?;
-        let receipts = self._read_all_receipts(handle, seq_num).await?;
+        println!("YO{}", idx);
+        // let seq_num = idx + 1;
+        let mut entry = self._read_remote(handle, idx).await?;
+        println!("YO2{}", idx);
+        let receipts = self._read_all_receipts(handle, idx).await?;
+        println!("YO3{}", idx);
         entry.receipts.merge_receipts(&receipts);
+        println!("YO4{}", idx);
         Ok(entry)
     }
 
@@ -163,13 +174,14 @@ impl PSLStorageConnector {
 
         let mut connection = self.connection.lock().await;
         let res = connection.read_remote(req).await.map_err(|e| {
+            eprintln!("gRPC error: {:?} handle_id: {}", e, handle_id.unwrap());
             LedgerStoreError::LedgerError(StorageError::SerializationError)
         })?;
 
         let data = res.into_inner().data;
-        if data.is_empty() {
-            return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
-        }
+        // if data.is_empty() {
+        //     return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
+        // }
 
         let entry = LedgerEntry::new(Block::from_bytes(&data).unwrap(), Receipts::new(), None);
         
@@ -181,9 +193,9 @@ impl PSLStorageConnector {
         handle: &Handle,
         idx: usize,
     ) -> Result<Receipts, LedgerStoreError> {
-        let handle_id = self.get_handle_id(handle, false, false);
+        let handle_id = self.get_handle_id(handle, true, false);
         if handle_id.is_none() {
-            return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
+            return Ok(Receipts::new());
         }
         let receipt_seq_nums = {
           let receipt_index_map = self.receipt_index_map.read().unwrap();
@@ -194,13 +206,14 @@ impl PSLStorageConnector {
         };
 
         let mut receipts = Receipts::new();
+        println!("YO100 {} {}", idx, receipt_seq_nums.len());
+        let mut connection = self.connection.lock().await;
         for seq_num in receipt_seq_nums {
           let req = ReadRemoteReq {
               origin_id: handle_id.unwrap(),
               seq_num: seq_num as u64,
           };
 
-          let mut connection = self.connection.lock().await;
           let res = connection.read_remote(req).await.map_err(|e| {
               LedgerStoreError::LedgerError(StorageError::SerializationError)
           })?;
@@ -210,8 +223,8 @@ impl PSLStorageConnector {
               return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
           }
 
-          let receipt = Receipt::from_bytes(&data).unwrap();
-          receipts.add(&receipt);
+          let _receipts = Receipts::from_bytes(&data).unwrap();
+          receipts.merge_receipts(&_receipts);
         }
 
         Ok(receipts)
@@ -309,6 +322,7 @@ impl LedgerStore for PSLStorageConnector {
       }
       async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>
       {
+        println!("YOooooooooooooooo {}", idx);
         self.read_ledger_by_index(&self.view_handle, idx).await
       }
     

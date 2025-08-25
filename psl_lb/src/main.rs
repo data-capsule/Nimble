@@ -45,10 +45,10 @@ impl PslStorageCall for PslStorageCallService {
         info!("StoreRemote called: origin_id={}, seq_num={}, data_size={}", 
               req.origin_id, req.seq_num, req.data.len());
         
-        // Validate request
-        if req.data.is_empty() {
-            return Err(Status::invalid_argument("Data cannot be empty"));
-        }
+        // // Validate request
+        // if req.data.is_empty() {
+        //     return Err(Status::invalid_argument("Data cannot be empty"));
+        // }
         
         // Store the data
         match self.storage.store(req.origin_id, req.seq_num, req.data).await {

@@ -327,7 +327,7 @@ async fn increment_counter(
     .increment_counter(&handle, &tag, req.expected_counter, sigformat)
     .await;
   if res.is_err() {
-    eprintln!("failed to increment a counter {:?}", res);
+    eprintln!("failed to increment a counter {:?}. Handle: {:?}", res, handle);
     return (StatusCode::CONFLICT, Json(json!({})));
   }
   let signature = res.unwrap();
