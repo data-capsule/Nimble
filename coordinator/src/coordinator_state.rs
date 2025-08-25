@@ -14,8 +14,7 @@ use std::{
   sync::{Arc, RwLock},
 };
 use store::ledger::{
-  azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
-  mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
+  azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, psl_storage::PSLStorageConnector, LedgerEntry, LedgerStore
 };
 use store::{errors::LedgerStoreError, errors::StorageError};
 use tokio::sync::mpsc;
@@ -472,7 +471,8 @@ impl CoordinatorState {
         num_grpc_channels,
       },
       _ => CoordinatorState {
-        ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
+        // ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
+        ledger_store: Arc::new(Box::new(PSLStorageConnector::new(args.get("psl_lb_url").unwrap_or(&String::from("http://localhost:50051")).to_string()).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,

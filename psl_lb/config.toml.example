@@ -1,0 +1,20 @@
+# PSL Load Balancer Configuration Example
+# Copy this file to config.toml and modify as needed
+
+[server]
+# Server binding address
+addr = "[::1]:50051"
+
+# Maximum number of concurrent streams (optional)
+max_concurrent_streams = 100
+
+# Maximum frame size in bytes (optional, default: 1MB)
+max_frame_size = 1048576
+
+[storage]
+# Storage backend type: "memory", "redis", "postgres", etc.
+backend = "memory"
+
+# Connection string for external storage backends (optional)
+# connection_string = "redis://localhost:6379"
+# connection_string = "postgresql://user:pass@localhost/psl_db"
