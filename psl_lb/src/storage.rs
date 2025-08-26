@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 use core::num;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Duration;
 use crate::error::PslError;
 
 #[async_trait]
@@ -76,6 +78,7 @@ impl StorageBackend for InMemoryStorage {
 
 pub struct StorageManager<T: StorageBackend> {
     backend_txs: Vec<mpsc::Sender<StorageCommand>>,
+    graveyard_tx: mpsc::Sender<oneshot::Receiver<Result<(), PslError>>>,
     num_tasks: usize,
     __rr_cnt: AtomicUsize,
     marker: PhantomData<T>,
@@ -94,7 +97,16 @@ impl<T: StorageBackend> StorageManager<T> {
                 backend.run().await;
             });
         }
-        Self { backend_txs, num_tasks, __rr_cnt: AtomicUsize::new(0), marker: PhantomData }
+
+        let (graveyard_tx, mut graveyard_rx) = mpsc::channel(1000);
+
+        tokio::spawn(async move {
+            while let Some(recv_tx) = graveyard_rx.recv().await {
+                let _ = timeout(Duration::from_millis(100), recv_tx).await;
+            }
+        });
+
+        Self { backend_txs, graveyard_tx, num_tasks, __rr_cnt: AtomicUsize::new(0), marker: PhantomData }
     }
 
     pub async fn store(&self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError> {
@@ -106,21 +118,40 @@ impl<T: StorageBackend> StorageManager<T> {
             resp_rxs.push(resp_rx);
         }
 
-        // Wait for all responses
-        for rx in resp_rxs.drain(..) {
+        // Wait for majority responses.
+        let mut votes = 0;
+
+        while votes < self.num_tasks / 2 {
+            let rx = resp_rxs.pop().unwrap();
             let _ = rx.await.unwrap();
+            votes += 1;
         }
+
+        for rx in resp_rxs.drain(..) {
+            let _ = self.graveyard_tx.send(rx).await;
+        }
+
         Ok(())
     }
 
     pub async fn read(&self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
-        // Read command gets forwarded to one backend only
-        let (resp_tx, resp_rx) = oneshot::channel();
-        
-        let _idx = self.__rr_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.num_tasks;
-        self.backend_txs[_idx].send(StorageCommand::Read(origin_id, seq_num, resp_tx)).await.unwrap();
-        let data = resp_rx.await.unwrap().unwrap();
-        Ok(data)
+        // Read command gets forwarded to one backend only, in most cases.
+        // But since we only wait for majority responses while writing, we may be unfortunate in a reading before writing case.
+
+        let _idx = self.__rr_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        for i in 0..self.num_tasks {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            
+            self.backend_txs[(_idx + i) % self.num_tasks].send(StorageCommand::Read(origin_id, seq_num, resp_tx)).await.unwrap();
+            let data = resp_rx.await.unwrap().unwrap();
+
+            if data.is_some() {
+                return Ok(data);
+            }
+        }
+
+        // If we reached here, the data is truly not present.
+        Ok(None)
     }
 
     pub async fn health_check(&self) -> Result<(), PslError> {
