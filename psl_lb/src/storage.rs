@@ -1,66 +1,141 @@
 use async_trait::async_trait;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use core::num;
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 use crate::error::PslError;
 
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
-    async fn store(&self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError>;
-    async fn read(&self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError>;
-    async fn health_check(&self) -> Result<(), PslError>;
+    fn new(cmd_rx: mpsc::Receiver<StorageCommand>) -> Self;
+    async fn run(&mut self);
+    async fn store(&mut self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError>;
+    async fn read(&mut self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError>;
+    async fn health_check(&mut self) -> Result<(), PslError>;
+}
+
+enum StorageCommand {
+    Store(u64, u64, Vec<u8>, oneshot::Sender<Result<(), PslError>>),
+    Read(u64, u64, oneshot::Sender<Result<Option<Vec<u8>>, PslError>>),
+    HealthCheck(oneshot::Sender<Result<(), PslError>>),
 }
 
 #[derive(Debug)]
 pub struct InMemoryStorage {
-    data: Arc<RwLock<HashMap<(u64, u64), Vec<u8>>>>,
+    data: HashMap<(u64, u64), Vec<u8>>,
+    cmd_rx: mpsc::Receiver<StorageCommand>,
 }
 
-impl InMemoryStorage {
-    pub fn new() -> Self {
+
+#[async_trait]
+impl StorageBackend for InMemoryStorage {
+    fn new(cmd_rx: mpsc::Receiver<StorageCommand>) -> Self {
         Self {
-            data: Arc::new(RwLock::new(HashMap::new())),
+            data: HashMap::new(),
+            cmd_rx,
+        }
+    }
+
+    async fn store(&mut self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError> {
+        self.data.insert((origin_id, seq_num), data);
+        Ok(())
+    }
+
+    async fn read(&mut self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
+        Ok(self.data.get(&(origin_id, seq_num)).cloned())
+    }
+
+    async fn health_check(&mut self) -> Result<(), PslError> {
+        // In-memory storage is always healthy
+        Ok(())
+    }
+
+    async fn run(&mut self) {
+        while let Some(cmd) = self.cmd_rx.recv().await {
+            match cmd {
+                StorageCommand::Store(origin_id, seq_num, data, tx) => {
+                    self.store(origin_id, seq_num, data).await;
+                    tx.send(Ok(())).unwrap();
+                },
+                StorageCommand::Read(origin_id, seq_num, tx) => {
+                    let data = self.read(origin_id, seq_num).await;
+                    tx.send(data).unwrap();
+                },
+                StorageCommand::HealthCheck(tx) => {
+                    let data = self.health_check().await;
+                    tx.send(data).unwrap();
+                },
+            }
         }
     }
 }
 
-#[async_trait]
-impl StorageBackend for InMemoryStorage {
-    async fn store(&self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError> {
-        let mut storage = self.data.write().await;
-        storage.insert((origin_id, seq_num), data);
-        Ok(())
-    }
-
-    async fn read(&self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
-        let storage = self.data.read().await;
-        Ok(storage.get(&(origin_id, seq_num)).cloned())
-    }
-
-    async fn health_check(&self) -> Result<(), PslError> {
-        // In-memory storage is always healthy
-        Ok(())
-    }
+pub struct StorageManager<T: StorageBackend> {
+    backend_txs: Vec<mpsc::Sender<StorageCommand>>,
+    num_tasks: usize,
+    __rr_cnt: AtomicUsize,
+    marker: PhantomData<T>,
 }
 
-pub struct StorageManager {
-    backend: Box<dyn StorageBackend>,
-}
+impl<T: StorageBackend> StorageManager<T> {
+    pub async fn new(num_tasks: usize) -> Self {
+        assert!(num_tasks > 0);
+        let mut backend_txs = Vec::new();
+        for _ in 0..num_tasks {
+            let (tx, rx) = mpsc::channel(1000);
+            backend_txs.push(tx);
 
-impl StorageManager {
-    pub fn new(backend: Box<dyn StorageBackend>) -> Self {
-        Self { backend }
+            tokio::spawn(async move {
+                let mut backend = T::new(rx);
+                backend.run().await;
+            });
+        }
+        Self { backend_txs, num_tasks, __rr_cnt: AtomicUsize::new(0), marker: PhantomData }
     }
 
     pub async fn store(&self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError> {
-        self.backend.store(origin_id, seq_num, data).await
+        // Store command gets forwarded to all backends
+        let mut resp_rxs = Vec::new();
+        for tx in self.backend_txs.iter() {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            tx.send(StorageCommand::Store(origin_id, seq_num, data.clone(), resp_tx)).await.unwrap();
+            resp_rxs.push(resp_rx);
+        }
+
+        // Wait for all responses
+        for rx in resp_rxs.drain(..) {
+            let _ = rx.await.unwrap();
+        }
+        Ok(())
     }
 
     pub async fn read(&self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
-        self.backend.read(origin_id, seq_num).await
+        // Read command gets forwarded to one backend only
+        let (resp_tx, resp_rx) = oneshot::channel();
+        
+        let _idx = self.__rr_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.num_tasks;
+        self.backend_txs[_idx].send(StorageCommand::Read(origin_id, seq_num, resp_tx)).await.unwrap();
+        let data = resp_rx.await.unwrap().unwrap();
+        Ok(data)
     }
 
     pub async fn health_check(&self) -> Result<(), PslError> {
-        self.backend.health_check().await
+        // Health check command gets forwarded to all backends
+        let mut resp_rxs = Vec::new();
+        for tx in self.backend_txs.iter() {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            tx.send(StorageCommand::HealthCheck(resp_tx)).await.unwrap();
+            resp_rxs.push(resp_rx);
+        }
+
+        // Wait for all responses
+        for rx in resp_rxs.drain(..) {
+            let _ = rx.await.unwrap();
+        }
+        Ok(())
     }
 }

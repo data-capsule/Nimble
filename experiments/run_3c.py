@@ -31,7 +31,7 @@ setup_output_folder(SSH_IP_CLIENT, out_folder)
 
 for i in range(NUM_ITERATIONS):
     teardown(True)
-    setup("", True)
+    setup("psl_lb", True)
 
     # Creates the ledgers so that we can append to them
     operation = "create"

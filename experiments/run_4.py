@@ -106,7 +106,7 @@ for num in NUM_LEDGERS:
     teardown(False)
     kill_backup_endorsers()
 
-    setup("", False)
+    setup("psl_lb", False)
     setup_backup_endorsers()
 
     create_ledgers(num)

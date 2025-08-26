@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{atomic::{AtomicU64, Ordering}, RwLock}};
+use std::{collections::HashMap, sync::{atomic::{AtomicU64, Ordering}, RwLock}, time::Instant};
 
 use async_trait::async_trait;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipt, Receipts};
@@ -13,12 +13,16 @@ use crate::psl_proto::psl_storage_call_client::PslStorageCallClient;
 pub struct PSLStorageConnector {
     connection: Arc<Mutex<PslStorageCallClient<Channel>>>,
     view_handle: Handle,
-    tail_index: Arc<RwLock<HashMap<Handle, usize>>>,
+    tail_index: Arc<Mutex<HashMap<Handle, usize>>>,
 
     handle_counter: AtomicU64,
     handle_map: Arc<RwLock<HashMap<Handle, u64>>>,
     receipt_index_map: Arc<RwLock<HashMap<(Handle, usize), Vec<usize>>>>,
     receipt_index_counter: Arc<RwLock<HashMap<Handle, usize>>>,
+}
+
+thread_local! {
+  static CONNECTION: Option<Mutex<PslStorageCallClient<Channel>>> = None;
 }
 
 impl PSLStorageConnector {
@@ -37,7 +41,7 @@ impl PSLStorageConnector {
         let res = Self {
             connection: Arc::new(Mutex::new(connection)),
             view_handle: view_handle.clone(),
-            tail_index: Arc::new(RwLock::new(HashMap::new())),
+            tail_index: Arc::new(Mutex::new(HashMap::new())),
             handle_counter: AtomicU64::new(0),
             handle_map: Arc::new(RwLock::new(HashMap::new())),
             receipt_index_map: Arc::new(RwLock::new(HashMap::new())),
@@ -63,10 +67,6 @@ impl PSLStorageConnector {
                 return None;
             }
         };
-
-        if create_if_not_exists {
-            println!("handle_id: {}, handle: {:?}", if is_for_receipts { handle_id + 1 } else { handle_id }, handle);
-        }
 
         if is_for_receipts {
             Some(handle_id + 1)
@@ -124,13 +124,18 @@ impl PSLStorageConnector {
             seq_num: seq_num as u64,
         };
         
-        let mut connection = self.connection.lock().await;
-        let res = connection.store_remote(req).await.map_err(|e| {
-            LedgerStoreError::LedgerError(StorageError::SerializationError)
-        })?;
-
-        if !res.into_inner().success {
-            return Err(LedgerStoreError::LedgerError(StorageError::DeserializationError));
+        {
+          let start = Instant::now();
+          let mut connection = CONNECTION.get()
+          
+          let res = connection.store_remote(req).await.map_err(|e| {
+              LedgerStoreError::LedgerError(StorageError::SerializationError)
+          })?;
+  
+          if !res.into_inner().success {
+              return Err(LedgerStoreError::LedgerError(StorageError::DeserializationError));
+          }
+          println!("store_remote time: {:?}", start.elapsed());
         }
 
         let mut receipt_index_map = self.receipt_index_map.write().unwrap();
@@ -145,14 +150,10 @@ impl PSLStorageConnector {
         handle: &Handle,
         idx: usize,
     ) -> Result<LedgerEntry, LedgerStoreError> {
-        println!("YO{}", idx);
         // let seq_num = idx + 1;
         let mut entry = self._read_remote(handle, idx).await?;
-        println!("YO2{}", idx);
         let receipts = self._read_all_receipts(handle, idx).await?;
-        println!("YO3{}", idx);
         entry.receipts.merge_receipts(&receipts);
-        println!("YO4{}", idx);
         Ok(entry)
     }
 
@@ -206,7 +207,6 @@ impl PSLStorageConnector {
         };
 
         let mut receipts = Receipts::new();
-        println!("YO100 {} {}", idx, receipt_seq_nums.len());
         let mut connection = self.connection.lock().await;
         for seq_num in receipt_seq_nums {
           let req = ReadRemoteReq {
@@ -250,10 +250,15 @@ impl LedgerStore for PSLStorageConnector {
         expected_height: usize,
       ) -> Result<(usize, Nonces), LedgerStoreError>
       {
+        let start = Instant::now();
         self.store_remote(handle, block, expected_height).await?;
+        println!("store_remote time: {:?}", start.elapsed());
 
-        let mut tail_index = self.tail_index.write().unwrap();
+        let start = Instant::now();
+        let mut tail_index = self.tail_index.lock().await;
         tail_index.insert(handle.clone(), expected_height);
+        println!("tail_index time: {:?}", start.elapsed());
+
         Ok((expected_height, Nonces::new()))
       }
       async fn attach_ledger_receipts(
@@ -263,7 +268,11 @@ impl LedgerStore for PSLStorageConnector {
         receipt: &Receipts,
       ) -> Result<(), LedgerStoreError>
       {
-        self.append_receipt(handle, idx, receipt).await
+        // How long does this take?
+        let start = Instant::now();
+        self.append_receipt(handle, idx, receipt).await?;
+        println!("append_receipt time: {:?}", start.elapsed());
+        Ok(())
       }
 
       #[allow(unused_variables)]
@@ -281,7 +290,7 @@ impl LedgerStore for PSLStorageConnector {
       ) -> Result<(LedgerEntry, usize), LedgerStoreError>
       {
         let tail_index = {
-            let tail_index = self.tail_index.read().unwrap();
+            let tail_index = self.tail_index.lock().await;
             *tail_index.get(handle).ok_or(LedgerStoreError::LedgerError(
                 StorageError::InvalidIndex
             ))?
@@ -322,7 +331,6 @@ impl LedgerStore for PSLStorageConnector {
       }
       async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>
       {
-        println!("YOooooooooooooooo {}", idx);
         self.read_ledger_by_index(&self.view_handle, idx).await
       }
     

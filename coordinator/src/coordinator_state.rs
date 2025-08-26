@@ -470,9 +470,14 @@ impl CoordinatorState {
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
       },
-      _ => CoordinatorState {
-        // ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
+      "psl_lb" => CoordinatorState {
         ledger_store: Arc::new(Box::new(PSLStorageConnector::new(args.get("psl_lb_url").unwrap_or(&String::from("http://localhost:50051")).to_string()).await.unwrap())),
+        conn_map: Arc::new(RwLock::new(HashMap::new())),
+        verifier_state: Arc::new(RwLock::new(VerifierState::new())),
+        num_grpc_channels,
+      },
+      _ => CoordinatorState {
+        ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,

@@ -1,14 +1,10 @@
 use tonic::{transport::Server, Request, Response, Status};
 use clap::Parser;
 use std::net::SocketAddr;
-use tracing::{info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use psl_lb::{
-    config::Config,
-    error::PslError,
-    storage::{StorageManager, InMemoryStorage},
-    psl_proto::psl_storage_call_server::{PslStorageCall, PslStorageCallServer},
-    psl_proto::{ReadRemoteReq, ReadRemoteResp, StoreRemoteReq, StoreRemoteResp},
+    config::Config, error::PslError, psl_proto::{psl_storage_call_server::{PslStorageCall, PslStorageCallServer}, ReadRemoteReq, ReadRemoteResp, StoreRemoteReq, StoreRemoteResp}, storage::{InMemoryStorage, StorageManager}, StorageBackend
 };
 
 #[derive(Parser, Debug)]
@@ -23,26 +19,26 @@ struct Args {
     config: Option<String>,
 }
 
-pub struct PslStorageCallService {
-    storage: StorageManager,
+pub struct PslStorageCallService<T: StorageBackend> {
+    storage: StorageManager<T>,
     config: Config,
 }
 
-impl PslStorageCallService {
-    pub fn new(config: Config) -> Self {
-        let storage = StorageManager::new(Box::new(InMemoryStorage::new()));
+impl<T: StorageBackend> PslStorageCallService<T> {
+    pub async fn new(config: Config) -> Self {
+        let storage = StorageManager::<T>::new(config.storage.num_tasks.unwrap_or(1)).await;
         Self { storage, config }
     }
 }
 
 #[tonic::async_trait]
-impl PslStorageCall for PslStorageCallService {
+impl<T: StorageBackend + 'static> PslStorageCall for PslStorageCallService<T> {
     async fn store_remote(
         &self,
         request: Request<StoreRemoteReq>,
     ) -> Result<Response<StoreRemoteResp>, Status> {
         let req = request.into_inner();
-        info!("StoreRemote called: origin_id={}, seq_num={}, data_size={}", 
+        debug!("StoreRemote called: origin_id={}, seq_num={}, data_size={}", 
               req.origin_id, req.seq_num, req.data.len());
         
         // // Validate request
@@ -53,7 +49,7 @@ impl PslStorageCall for PslStorageCallService {
         // Store the data
         match self.storage.store(req.origin_id, req.seq_num, req.data).await {
             Ok(()) => {
-                info!("Successfully stored data for origin_id={}, seq_num={}", req.origin_id, req.seq_num);
+                debug!("Successfully stored data for origin_id={}, seq_num={}", req.origin_id, req.seq_num);
                 let response = StoreRemoteResp { success: true };
                 Ok(Response::new(response))
             }
@@ -69,12 +65,12 @@ impl PslStorageCall for PslStorageCallService {
         request: Request<ReadRemoteReq>,
     ) -> Result<Response<ReadRemoteResp>, Status> {
         let req = request.into_inner();
-        info!("ReadRemote called: origin_id={}, seq_num={}", req.origin_id, req.seq_num);
+        debug!("ReadRemote called: origin_id={}, seq_num={}", req.origin_id, req.seq_num);
         
         // Retrieve the data
         match self.storage.read(req.origin_id, req.seq_num).await {
             Ok(Some(data)) => {
-                info!("Successfully retrieved data for origin_id={}, seq_num={}, size={}", 
+                debug!("Successfully retrieved data for origin_id={}, seq_num={}, size={}", 
                       req.origin_id, req.seq_num, data.len());
                 let response = ReadRemoteResp { data };
                 Ok(Response::new(response))
@@ -95,7 +91,7 @@ impl PslStorageCall for PslStorageCallService {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter("psl_lb=debug,tower=debug,tonic=debug")
+        .with_env_filter("psl_lb=warn,tower=warn,tonic=warn")
         .init();
 
     let args = Args::parse();
@@ -121,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let socket_addr: SocketAddr = addr.parse()?;
     
-    let service = PslStorageCallService::new(config);
+    let service = PslStorageCallService::<InMemoryStorage>::new(config).await;
     
     let svc = PslStorageCallServer::new(service);
     

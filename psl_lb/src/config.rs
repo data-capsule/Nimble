@@ -18,6 +18,7 @@ pub struct ServerConfig {
 pub struct StorageConfig {
     pub backend: String,
     pub connection_string: Option<String>,
+    pub num_tasks: Option<usize>,
 }
 
 impl Default for Config {
@@ -25,12 +26,13 @@ impl Default for Config {
         Self {
             server: ServerConfig {
                 addr: "[::1]:50051".to_string(),
-                max_concurrent_streams: Some(100),
-                max_frame_size: Some(1024 * 1024), // 1MB
+                max_concurrent_streams: Some(500),
+                max_frame_size: Some(1024 * 1024 * 1024), // 1GB
             },
             storage: StorageConfig {
                 backend: "memory".to_string(),
                 connection_string: None,
+                num_tasks: Some(8),
             },
         }
     }

@@ -4,8 +4,15 @@ from config import *
 
 # make sure to set the configuration in config.py
 
-CMD = "screen -d -m " + NIMBLE_BIN_PATH
+CMD = "screen -d -m '" + NIMBLE_BIN_PATH
 HAS_LB = LISTEN_IP_ENDPOINT_1 != LISTEN_IP_LOAD_BALANCER # if not the same, we assume 2 endpoints and a load balancer
+
+def setup_psl_lb():
+    psl_lb = ssh_cmd(SSH_IP_PSL_LB, CMD + "/psl_lb -a " + PSL_LB_BIND_ADDR)
+
+    print(psl_lb)
+    os.system(psl_lb)
+
 
 def setup_main_endorsers():
     endorser1 = ssh_cmd(SSH_IP_ENDORSER_1, CMD + "/endorser -t " + LISTEN_IP_ENDORSER_1 + " -p " + PORT_ENDORSER_1)
@@ -62,12 +69,17 @@ def setup_sgx_endorsers():
 
 
 def setup_coordinator(store):
+    print("Using store:", store)
+    if store == "psl_lb":
+        store = " -s psl_lb -n psl_lb"
+
     coordinator = CMD + "/coordinator -t " + LISTEN_IP_COORDINATOR + " -p " + PORT_COORDINATOR + " -r " + PORT_COORDINATOR_CTRL
     coordinator += " -e \"http://" + LISTEN_IP_ENDORSER_1 + ":" + PORT_ENDORSER_1
     coordinator += ",http://" + LISTEN_IP_ENDORSER_2 + ":" + PORT_ENDORSER_2
     coordinator += ",http://" + LISTEN_IP_ENDORSER_3 + ":" + PORT_ENDORSER_3
     coordinator += "\" -l 60"
     coordinator += store
+    coordinator += " > /tmp/coordinator.log 2>&1'"
 
     coordinator = ssh_cmd(SSH_IP_COORDINATOR, coordinator)
 
@@ -163,7 +175,15 @@ def kill_endpoints():
         print(endpoint2)
         os.system(endpoint2)
 
+def kill_psl_lb():
+    psl_lb = ssh_cmd(SSH_IP_PSL_LB, "pkill psl_lb")
+
+    print(psl_lb)
+    os.system(psl_lb)
+
+
 def setup(store, sgx):
+    setup_psl_lb()
     if sgx:
         setup_sgx_endorsers()
         setup_coordinator_sgx(store)
@@ -180,6 +200,7 @@ def teardown(sgx):
         kill_sgx_endorsers()
     else:
         kill_endorsers()
+    kill_psl_lb()
 
 def ssh_cmd(ip, cmd):
     if LOCAL_RUN:
