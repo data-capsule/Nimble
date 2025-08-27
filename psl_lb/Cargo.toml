@@ -19,6 +19,12 @@ thiserror = "1.0"
 prost = "0.11.0"
 prost-types = "0.11.0"
 
+prost-new = { version = "0.14.1", package = "prost" }
+prost-new-types = { version = "0.14.1", package = "prost-types" }
+
+psl = { git = "https://github.com/data-capsule/psl-cvm.git", branch = "psl" }
+
 [build-dependencies]
 tonic-build = "0.8.2"
 prost-build = "0.11.0"
+prost-new-build = { version = "0.14.1", package = "prost-build" }

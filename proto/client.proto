@@ -1,0 +1,62 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package proto.client;
+import "execution.proto";
+
+message ProtoClientRequest {
+    // This structure is temporary. It MUST change.
+    proto.execution.ProtoTransaction tx = 1;
+    string origin = 2;
+    bytes sig = 3;
+    uint64 client_tag = 4;
+}
+
+message ProtoByzResponse {
+    uint64 block_n = 1;
+    uint64 tx_n = 2;
+    uint64 client_tag = 3;
+    // bytes req_digest = 3;
+}
+
+message ProtoTransactionReceipt {
+    bytes req_digest = 1;
+    uint64 block_n = 2;
+    uint64 tx_n = 3;
+
+    proto.execution.ProtoTransactionResult results = 4;
+
+    bool await_byz_response = 5;
+    repeated ProtoByzResponse byz_responses = 6;
+}
+
+message ProtoTentativeReceipt {
+    uint64 block_n = 1;
+    uint64 tx_n = 2;
+}
+
+message ProtoTryAgain { 
+    string serialized_node_infos = 1;
+}
+
+message ProtoCurrentLeader {
+    string name = 1;
+    string serialized_node_infos = 2;
+}
+
+message ProtoClientReply {
+    oneof reply {
+        ProtoTransactionReceipt receipt = 1;
+        ProtoTryAgain try_again = 2;
+        ProtoCurrentLeader leader = 3;
+        ProtoTentativeReceipt tentative_receipt = 4; 
+    }
+    uint64 client_tag = 5;
+}
+
+message ProtoByzPollRequest {
+    uint64 block_n = 1;
+    uint64 tx_n = 2;
+}

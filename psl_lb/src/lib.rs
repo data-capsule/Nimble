@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod storage;
+pub mod psl_storage;
 
 pub use config::Config;
 pub use error::PslError;

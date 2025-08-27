@@ -1,0 +1,56 @@
+// Copyright (c) Shubham Mishra. All rights reserved.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package proto.execution;
+
+enum ProtoTransactionOpType {
+    // For KV store style operations
+    NOOP = 0;
+    READ = 1;
+    WRITE = 2;
+
+    // For counter style operations
+    INCREMENT = 3;
+    CAS = 4;
+    // DECREMENT = 4; <-- For decrement send, INCREMENT with negative value
+
+    // For reconfiguration
+    ADD_LEARNER = 5;
+    UPGRADE_FULL_NODE = 6;
+    DEL_LEARNER = 7;
+    DOWNGRADE_FULL_NODE = 8;
+
+    // For SQL and other operations
+    CUSTOM = 9;
+
+    // To check for byz commit
+    PROBE = 10;
+}
+
+message ProtoTransactionOp {
+    ProtoTransactionOpType op_type = 1;
+    repeated bytes operands = 2;
+}
+
+message ProtoTransactionPhase {
+    repeated ProtoTransactionOp ops = 1;
+}
+
+message ProtoTransaction {
+    ProtoTransactionPhase on_receive = 1;
+    ProtoTransactionPhase on_crash_commit = 2;
+    ProtoTransactionPhase on_byzantine_commit = 3;
+    bool is_reconfiguration = 4;
+    bool is_2pc = 5;
+}
+
+message ProtoTransactionOpResult {
+    bool success = 1;
+    repeated bytes values = 2;
+}
+
+message ProtoTransactionResult {
+    repeated ProtoTransactionOpResult result = 1;
+}

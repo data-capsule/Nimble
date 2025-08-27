@@ -2,25 +2,30 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
-use core::num;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
+use crate::config::InMemoryStorageConfig;
 use crate::error::PslError;
 
+pub trait ConfigType<'a>: Clone + Send + Sync {
+    fn num_tasks(&self) -> usize;
+    fn commit_threshold(&self) -> usize;
+}
+
 #[async_trait]
-pub trait StorageBackend: Send + Sync {
-    fn new(cmd_rx: mpsc::Receiver<StorageCommand>) -> Self;
+pub trait StorageBackend<'a>: Send + Sync {
+    type Config: ConfigType<'a>;
+
+    fn new(cmd_rx: mpsc::Receiver<StorageCommand>, config: Self::Config) -> Self;
     async fn run(&mut self);
     async fn store(&mut self, origin_id: u64, seq_num: u64, data: Vec<u8>) -> Result<(), PslError>;
     async fn read(&mut self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError>;
     async fn health_check(&mut self) -> Result<(), PslError>;
 }
 
-enum StorageCommand {
+pub enum StorageCommand {
     Store(u64, u64, Vec<u8>, oneshot::Sender<Result<(), PslError>>),
     Read(u64, u64, oneshot::Sender<Result<Option<Vec<u8>>, PslError>>),
     HealthCheck(oneshot::Sender<Result<(), PslError>>),
@@ -34,8 +39,9 @@ pub struct InMemoryStorage {
 
 
 #[async_trait]
-impl StorageBackend for InMemoryStorage {
-    fn new(cmd_rx: mpsc::Receiver<StorageCommand>) -> Self {
+impl<'a> StorageBackend<'a> for InMemoryStorage {
+    type Config = InMemoryStorageConfig;
+    fn new(cmd_rx: mpsc::Receiver<StorageCommand>, config: Self::Config) -> Self {
         Self {
             data: HashMap::new(),
             cmd_rx,
@@ -60,7 +66,7 @@ impl StorageBackend for InMemoryStorage {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 StorageCommand::Store(origin_id, seq_num, data, tx) => {
-                    self.store(origin_id, seq_num, data).await;
+                    let _ = self.store(origin_id, seq_num, data).await;
                     tx.send(Ok(())).unwrap();
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
@@ -76,24 +82,28 @@ impl StorageBackend for InMemoryStorage {
     }
 }
 
-pub struct StorageManager<T: StorageBackend> {
+pub struct StorageManager<'a, T: StorageBackend<'a>> {
     backend_txs: Vec<mpsc::Sender<StorageCommand>>,
     graveyard_tx: mpsc::Sender<oneshot::Receiver<Result<(), PslError>>>,
     num_tasks: usize,
     __rr_cnt: AtomicUsize,
-    marker: PhantomData<T>,
+    marker: PhantomData<&'a T>,
 }
 
-impl<T: StorageBackend> StorageManager<T> {
-    pub async fn new(num_tasks: usize) -> Self {
+impl<'a, T: StorageBackend<'a>> StorageManager<'a, T> 
+    where 'a: 'static
+{
+    pub async fn new(config: T::Config) -> Self {
+        let num_tasks = config.num_tasks();
         assert!(num_tasks > 0);
         let mut backend_txs = Vec::new();
         for _ in 0..num_tasks {
             let (tx, rx) = mpsc::channel(1000);
             backend_txs.push(tx);
 
+            let _config = config.clone();
             tokio::spawn(async move {
-                let mut backend = T::new(rx);
+                let mut backend = T::new(rx, _config);
                 backend.run().await;
             });
         }

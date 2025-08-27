@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use tracing::{debug, error, info, warn};
 
 use psl_lb::{
-    config::Config, error::PslError, psl_proto::{psl_storage_call_server::{PslStorageCall, PslStorageCallServer}, ReadRemoteReq, ReadRemoteResp, StoreRemoteReq, StoreRemoteResp}, storage::{InMemoryStorage, StorageManager}, StorageBackend
+    config::{Config, StorageBackendConfig}, error::PslError, psl_proto::{psl_storage_call_server::{PslStorageCall, PslStorageCallServer}, ReadRemoteReq, ReadRemoteResp, StoreRemoteReq, StoreRemoteResp}, psl_storage::{PSLWorker, WorkerConfig}, storage::{InMemoryStorage, StorageManager}, StorageBackend
 };
 
 #[derive(Parser, Debug)]
@@ -17,22 +17,28 @@ struct Args {
     /// Configuration file path
     #[arg(short, long)]
     config: Option<String>,
+
+    #[arg(short, long)]
+    worker_config: Option<String>,
 }
 
-pub struct PslStorageCallService<T: StorageBackend> {
-    storage: StorageManager<T>,
-    config: Config,
+pub struct PslStorageCallService<'a, T: StorageBackend<'a>> {
+    storage: StorageManager<'a, T>,
 }
 
-impl<T: StorageBackend> PslStorageCallService<T> {
-    pub async fn new(config: Config) -> Self {
-        let storage = StorageManager::<T>::new(config.storage.num_tasks.unwrap_or(1)).await;
-        Self { storage, config }
+impl<'a, T: StorageBackend<'a>> PslStorageCallService<'a, T> 
+    where 'a: 'static
+{
+    pub async fn new(config: T::Config) -> Self {
+        let storage = StorageManager::<'a, T>::new(config).await;
+        Self { storage }
     }
 }
 
 #[tonic::async_trait]
-impl<T: StorageBackend + 'static> PslStorageCall for PslStorageCallService<T> {
+impl<'a, T: StorageBackend<'a> + 'static> PslStorageCall for PslStorageCallService<'a, T> 
+    where 'a: 'static
+{
     async fn store_remote(
         &self,
         request: Request<StoreRemoteReq>,
@@ -97,6 +103,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     
     // Load configuration
+    if let Some(worker_config) = args.worker_config {
+        std::env::set_var("PSL_WORKER_CONFIG", worker_config);
+    }
+
     let config = if let Some(config_file) = args.config {
         std::env::set_var("PSL_CONFIG_FILE", config_file);
         Config::from_env()?
@@ -116,17 +126,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Binding to address: {}", addr);
 
     let socket_addr: SocketAddr = addr.parse()?;
-    
-    let service = PslStorageCallService::<InMemoryStorage>::new(config).await;
-    
-    let svc = PslStorageCallServer::new(service);
-    
+
     info!("Server listening on {}", socket_addr);
-    
-    Server::builder()
-        .add_service(svc)
-        .serve(socket_addr)
-        .await?;
+
+    match config.storage {
+        StorageBackendConfig::InMemory(config) => {
+            let service = PslStorageCallService::<InMemoryStorage>::new(config).await;
+            let svc = PslStorageCallServer::new(service);
+            Server::builder()
+                .add_service(svc)
+                .serve(socket_addr)
+                .await?;
+        }
+        StorageBackendConfig::PSL(config) => {
+            let config = WorkerConfig::from(config);
+            let service = PslStorageCallService::<PSLWorker>::new(config).await;
+            let svc = PslStorageCallServer::new(service);
+            Server::builder()
+                .add_service(svc)
+                .serve(socket_addr)
+                .await?;
+        }
+    };
 
     Ok(())
 }
