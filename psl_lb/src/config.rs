@@ -7,7 +7,7 @@ use crate::storage::ConfigType;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageBackendConfig {
     InMemory(InMemoryStorageConfig),
-    PSL(psl::config::Config),
+    PSL(psl::config::PSLWorkerConfig),
 }
 
 impl Default for StorageBackendConfig {
@@ -69,7 +69,7 @@ impl Config {
 
         if let Ok(worker_config_path) = std::env::var("PSL_WORKER_CONFIG") {
             let s = std::fs::read_to_string(worker_config_path).map_err(|e| config::ConfigError::Message(e.to_string()))?;
-            config.storage = StorageBackendConfig::PSL(psl::config::Config::deserialize(&s));
+            config.storage = StorageBackendConfig::PSL(psl::config::PSLWorkerConfig::deserialize(&s));
         }
 
 

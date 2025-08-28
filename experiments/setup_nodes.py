@@ -11,7 +11,7 @@ def setup_psl_lb():
     psl_lb = ssh_cmd(SSH_IP_PSL_LB, CMD + "/psl_lb -a " + PSL_LB_BIND_ADDR)
 
     print(psl_lb)
-    os.system(psl_lb)
+    # os.system(psl_lb)
 
 
 def setup_main_endorsers():
@@ -179,7 +179,7 @@ def kill_psl_lb():
     psl_lb = ssh_cmd(SSH_IP_PSL_LB, "pkill psl_lb")
 
     print(psl_lb)
-    os.system(psl_lb)
+    # os.system(psl_lb)
 
 
 def setup(store, sgx):

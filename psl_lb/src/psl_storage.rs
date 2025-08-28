@@ -4,19 +4,23 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
-use psl::crypto::KeyStore;
+use psl::crypto::{CryptoService, CryptoServiceConnector, KeyStore};
+use psl::proto::checkpoint::ProtoBackfillQuery;
+use psl::rpc::client::Client;
+use psl::storage_server::logserver::LogServer;
 use psl::utils::channel::{make_channel, Receiver};
-use psl::utils::AtomicStruct;
+use psl::utils::{AtomicStruct, RemoteStorageEngine, StorageService};
 use psl::worker::block_broadcaster::BlockBroadcaster;
-use psl::worker::block_sequencer::BlockSequencer;
+use psl::worker::block_sequencer::{BlockSequencer, SequencerCommand};
+use psl::worker::cache_manager::CacheCommand;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
 use tonic::async_trait;
 use tracing::{debug, warn};
 use prost_new::Message as _;
 
-use psl::config::PSLWorkerConfig;
+use psl::config::{AtomicPSLWorkerConfig, PSLWorkerConfig};
 use psl::proto::rpc::ProtoPayload;
 use psl::rpc::server::{MsgAckChan, RespType, Server, ServerContextType};
 use psl::rpc::MessageRef;
@@ -113,19 +117,105 @@ impl PinnedPSLWorkerServerContext {
 pub struct PSLWorkerPerChain {
     chain_id: u64,
     cmd_rx: mpsc::Receiver<StorageCommand>,
+    cache_manager_tx: Sender<SequencerCommand>,
+    backfill_request_tx: Sender<ProtoBackfillQuery>,
+    client_reply_rx: broadcast::Receiver<u64>,
     block_sequencer: Arc<Mutex<BlockSequencer>>,
     block_broadcaster: Arc<Mutex<BlockBroadcaster>>,
     staging: Arc<Mutex<Staging>>,
+    logserver: Arc<Mutex<LogServer>>,
 }
 
 impl PSLWorkerPerChain {
-    fn new(chain_id: u64, config: PSLWorkerConfig, vote_rx: Receiver<VoteWithSender>, cmd_rx: mpsc::Receiver<StorageCommand>) -> Self {
+
+    /// Must be called in tokio runtime.
+    async fn new(chain_id: u64, config: PSLWorkerConfig, vote_rx: Receiver<VoteWithSender>, cmd_rx: mpsc::Receiver<StorageCommand>, crypto: CryptoServiceConnector) -> Self {
+        let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
+        let key_store = AtomicKeyStore::new(key_store);
+        let worker_config = AtomicPSLWorkerConfig::new(config.clone());
+        let server_config = AtomicConfig::new(config.to_config());
+
+
+        let (cache_manager_tx, cache_manager_rx) = make_channel(1000);
+        let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(1000);
+        let (unused_block_broadcaster_tx, unused_block_broadcaster_rx) = make_channel(1000);
+        let (staging_tx, staging_rx) = make_channel(1000);
+        let (unused_block_broadcaster_delivery_tx, unused_block_broadcaster_delivery_rx) = make_channel(1000);
+        let (logserver_tx, logserver_rx) = make_channel(1000);
+        let (client_reply_tx, client_reply_rx) = broadcast::channel(1000);
+        let (gc_tx, gc_rx) = make_channel(1000);
+        let (backfill_request_tx, backfill_request_rx) = make_channel(1000);
+
+        let block_sequencer = BlockSequencer::new(
+            worker_config.clone(), crypto.clone(),
+            cache_manager_rx,
+            unused_block_broadcaster_tx,
+            block_broadcaster_tx,
+            chain_id,
+        );
+
+        let block_broadcaster_client = Client::new_atomic(server_config.clone(), key_store.clone(), false, 0).into();
+
+        let block_broadcaster = BlockBroadcaster::new(
+            psl::worker::block_broadcaster::BroadcasterConfig::WorkerConfig(worker_config.clone()),
+            block_broadcaster_client,
+            psl::worker::block_broadcaster::BroadcastMode::StorageStar,
+            true, false,
+            block_broadcaster_rx,
+            None,
+            Some(staging_tx),
+        );
+
+        let staging = Staging::new(
+            worker_config.clone(), crypto.clone(),
+            vote_rx,
+            staging_rx,
+            unused_block_broadcaster_delivery_tx,
+            logserver_tx,
+            client_reply_tx,
+            gc_tx,
+        );
+
+        let remote_storage = StorageService::<RemoteStorageEngine>::new(
+            server_config.clone(),
+            RemoteStorageEngine {
+                config: server_config.clone(),
+            },
+            1000
+        );
+
+        let logserver = LogServer::new(
+            server_config.clone(),
+            key_store.clone(),
+            remote_storage.get_connector(crypto.clone()),
+            gc_rx,
+            logserver_rx,
+            backfill_request_rx,
+        );
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = unused_block_broadcaster_rx.recv() => {
+                        // Black hole
+                    }
+                    _ = unused_block_broadcaster_delivery_rx.recv() => {
+                        // Black hole
+                    }
+                }
+            }
+        });
+        
         let worker = Self {
             chain_id,
             cmd_rx,
-            block_sequencer: Arc::new(Mutex::new(BlockSequencer::new(chain_id, config))),
-            block_broadcaster: Arc::new(Mutex::new(BlockBroadcaster::new(chain_id, config))),
-            staging: Arc::new(Mutex::new(Staging::new(chain_id, config))),
+            cache_manager_tx,
+            backfill_request_tx,
+            client_reply_rx,
+            block_sequencer: Arc::new(Mutex::new(block_sequencer)),
+            block_broadcaster: Arc::new(Mutex::new(block_broadcaster)),
+            staging: Arc::new(Mutex::new(staging)),
+            logserver: Arc::new(Mutex::new(logserver)),
         };
 
         worker
@@ -177,6 +267,9 @@ pub struct PSLWorker {
     server: Arc<Server<PinnedPSLWorkerServerContext>>,
     staging_txs: AtomicHashMap<u64, Sender<VoteWithSender>>,
     cmd_txs: HashMap<u64, mpsc::Sender<StorageCommand>>,
+    client_reply_rxs: HashMap<u64, mpsc::Receiver<u64>>,
+    crypto_connector: CryptoServiceConnector,
+
 }
 
 #[derive(Clone)]
@@ -198,15 +291,18 @@ impl<'a> ConfigType<'a> for WorkerConfig<'a> {
     }
 }
 
-impl<'a> From<psl::config::Config> for WorkerConfig<'a> {
-    fn from(config: psl::config::Config) -> Self {
+impl<'a> From<psl::config::PSLWorkerConfig> for WorkerConfig<'a> {
+    fn from(config: psl::config::PSLWorkerConfig) -> Self {
+        let og_config = config.to_config();
+        let og_config = AtomicConfig::new(og_config);
+        let key_store = AtomicKeyStore::new(KeyStore::new(
+            &config.rpc_config.allowed_keylist_path,
+            &config.rpc_config.signing_priv_key_path,
+        ));
         Self {
-            worker_config: PSLWorkerConfig::deserialize(&config.serialize()),
-            server_config: AtomicConfig::new(config.clone()),
-            keystore: AtomicKeyStore::new(KeyStore::new(
-                &config.rpc_config.allowed_keylist_path,
-                &config.rpc_config.signing_priv_key_path,
-            )),
+            worker_config: config,
+            server_config: og_config,
+            keystore: key_store,
             marker: PhantomData,
         }
     }
@@ -219,6 +315,19 @@ impl<'a> StorageBackend<'a> for PSLWorker {
         let ctx = PinnedPSLWorkerServerContext::new(config.server_config.clone(), config.keystore.clone());
         let staging_txs = ctx.staging_txs.clone();
 
+        let key_store = KeyStore::new(
+            &config.worker_config.rpc_config.allowed_keylist_path,
+            &config.worker_config.rpc_config.signing_priv_key_path,
+        );
+
+        let og_config = config.worker_config.to_config();
+        let og_config = AtomicConfig::new(og_config);
+        let key_store = AtomicKeyStore::new(key_store);
+        let mut crypto_service = CryptoService::new(config.worker_config.worker_config.num_crypto_workers, key_store, og_config);
+        crypto_service.run();
+
+        let crypto_connector = crypto_service.get_connector();
+
         // TODO: Prefill.
         
         Self {
@@ -227,6 +336,8 @@ impl<'a> StorageBackend<'a> for PSLWorker {
             cmd_txs: HashMap::new(),
             server: Arc::new(Server::new_atomic(config.server_config.clone(), ctx, config.keystore.clone())),
             staging_txs,
+            client_reply_rxs: HashMap::new(),
+            crypto_connector,
         }
     }
 
@@ -262,7 +373,13 @@ impl<'a> StorageBackend<'a> for PSLWorker {
             let (cmd_tx, cmd_rx) = mpsc::channel(1000);
             self.cmd_txs.insert(origin_id, cmd_tx);
 
-            let mut worker = PSLWorkerPerChain::new(origin_id, self.config.clone(), rx, cmd_rx);
+            let mut worker = PSLWorkerPerChain::new(
+                origin_id,
+                self.config.clone(),
+                rx,
+                cmd_rx,
+                self.crypto_connector.clone(),
+            ).await;
             tokio::spawn(async move {
                 worker.run().await;
             });

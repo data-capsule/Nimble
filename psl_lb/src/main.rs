@@ -97,7 +97,7 @@ impl<'a, T: StorageBackend<'a> + 'static> PslStorageCall for PslStorageCallServi
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter("psl_lb=warn,tower=warn,tonic=warn")
+        .with_env_filter("psl_lb=info,tower=warn,tonic=warn,psl=info")
         .init();
 
     let args = Args::parse();
