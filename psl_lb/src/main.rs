@@ -71,12 +71,12 @@ impl<'a, T: StorageBackend<'a> + 'static> PslStorageCall for PslStorageCallServi
         request: Request<ReadRemoteReq>,
     ) -> Result<Response<ReadRemoteResp>, Status> {
         let req = request.into_inner();
-        info!("ReadRemote called: origin_id={}, seq_num={}", req.origin_id, req.seq_num);
+        debug!("ReadRemote called: origin_id={}, seq_num={}", req.origin_id, req.seq_num);
         
         // Retrieve the data
         match self.storage.read(req.origin_id, req.seq_num).await {
             Ok(Some(data)) => {
-                info!("Successfully retrieved data for origin_id={}, seq_num={}, size={}", 
+                debug!("Successfully retrieved data for origin_id={}, seq_num={}, size={}", 
                       req.origin_id, req.seq_num, data.len());
                 let response = ReadRemoteResp { data };
                 Ok(Response::new(response))
@@ -97,7 +97,7 @@ impl<'a, T: StorageBackend<'a> + 'static> PslStorageCall for PslStorageCallServi
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter("psl_lb=info,tower=warn,tonic=warn,psl=info")
+        .with_env_filter("psl_lb=info,tower=warn,tonic=warn,psl=warn")
         .init();
 
     let args = Args::parse();

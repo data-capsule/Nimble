@@ -4,6 +4,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tracing::error;
 use tracing::warn;
+use std::cmp::max;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
@@ -72,9 +73,7 @@ impl<'a> StorageBackend<'a> for InMemoryStorage {
                     let _ = tx.send(Ok(()));
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
-                    warn!("Received read command for chain {}", origin_id);
                     let data = self.read(origin_id, seq_num).await;
-                    warn!("Read command for chain {} returned", origin_id);
                     let _ = tx.send(data);
                 },
                 StorageCommand::HealthCheck(tx) => {
@@ -96,6 +95,8 @@ pub struct StorageManager<'a, T: StorageBackend<'a>> {
     marker: PhantomData<&'a T>,
 }
 
+const CHAN_DEPTH: usize = 10000;
+
 impl<'a, T: StorageBackend<'a>> StorageManager<'a, T> 
     where 'a: 'static
 {
@@ -104,7 +105,7 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
         assert!(num_tasks > 0);
         let mut backend_txs = Vec::new();
         for _ in 0..num_tasks {
-            let (tx, rx) = mpsc::channel(1000);
+            let (tx, rx) = mpsc::channel(CHAN_DEPTH);
             backend_txs.push(tx);
 
             let _config = config.clone();
@@ -114,7 +115,7 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
             });
         }
 
-        let (graveyard_tx, mut graveyard_rx) = mpsc::channel(1000);
+        let (graveyard_tx, mut graveyard_rx) = mpsc::channel(CHAN_DEPTH);
 
         tokio::spawn(async move {
             while let Some(recv_tx) = graveyard_rx.recv().await {
@@ -130,16 +131,21 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
         let mut resp_rxs = Vec::new();
         for tx in self.backend_txs.iter() {
             let (resp_tx, resp_rx) = oneshot::channel();
+            warn!(">>>> storing to backend");
             tx.send(StorageCommand::Store(origin_id, seq_num, data.clone(), resp_tx)).await.unwrap();
+            warn!(">>>> stored to backend");
             resp_rxs.push(resp_rx);
         }
 
         // Wait for majority responses.
         let mut votes = 0;
 
-        while votes < self.num_tasks / 2 {
+
+        while votes < max(self.num_tasks / 2, 1) {
+            warn!(">>>> waiting for response");
             let rx = resp_rxs.pop().unwrap();
             let _ = rx.await.unwrap();
+            warn!(">>>> got response");
             votes += 1;
         }
 
@@ -158,7 +164,6 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
         for i in 0..self.num_tasks {
             let (resp_tx, resp_rx) = oneshot::channel();
             
-            warn!("Sending read command to backend {}", i);
             self.backend_txs[(_idx + i) % self.num_tasks].send(StorageCommand::Read(origin_id, seq_num, resp_tx)).await.unwrap();
             let data = resp_rx.await.unwrap().unwrap();
 

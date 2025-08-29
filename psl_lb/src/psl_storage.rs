@@ -10,7 +10,7 @@ use psl::crypto::{CryptoService, CryptoServiceConnector, KeyStore};
 use psl::proto::checkpoint::{ProtoAuthSenderType, ProtoBackfillQuery};
 use psl::proto::consensus::{ProtoAppendEntries, ProtoBlock};
 use psl::proto::execution::ProtoTransactionOpType;
-use psl::rpc::client::Client;
+use psl::rpc::client::{Client, PinnedClient};
 use psl::storage_server::logserver::LogServer;
 use psl::utils::channel::{make_channel, Receiver};
 use psl::utils::{deserialize_proto_block, AtomicStruct, RemoteStorageEngine, StorageService};
@@ -131,26 +131,28 @@ pub struct PSLWorkerPerChain {
     config: PSLWorkerConfig,
 }
 
+const CHAN_DEPTH: usize = 10000;
+
 impl PSLWorkerPerChain {
 
     /// Must be called in tokio runtime.
-    async fn new(chain_id: u64, config: PSLWorkerConfig, vote_rx: Receiver<VoteWithSender>, cmd_rx: mpsc::Receiver<StorageCommand>, crypto: CryptoServiceConnector) -> Self {
+    async fn new(chain_id: u64, config: PSLWorkerConfig, client: PinnedClient, vote_rx: Receiver<VoteWithSender>, cmd_rx: mpsc::Receiver<StorageCommand>, crypto: CryptoServiceConnector) -> Self {
         let key_store = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
         let key_store = AtomicKeyStore::new(key_store);
         let worker_config = AtomicPSLWorkerConfig::new(config.clone());
         let server_config = AtomicConfig::new(config.to_config());
 
 
-        let (cache_manager_tx, cache_manager_rx) = make_channel(1000);
-        let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(1000);
-        let (unused_block_broadcaster_tx, unused_block_broadcaster_rx) = make_channel(1000);
-        let (staging_tx, staging_rx) = make_channel(1000);
-        let (unused_block_broadcaster_delivery_tx, unused_block_broadcaster_delivery_rx) = make_channel(1000);
-        let (logserver_tx, logserver_rx) = make_channel(1000);
-        let (client_reply_tx, client_reply_rx) = broadcast::channel(1000);
-        let (gc_tx, gc_rx) = make_channel(1000);
-        let (backfill_request_tx, backfill_request_rx) = make_channel(1000);
-        let (unused_backfill_request_tx, unused_backfill_request_rx) = make_channel(1000);
+        let (cache_manager_tx, cache_manager_rx) = make_channel(CHAN_DEPTH);
+        let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(CHAN_DEPTH);
+        let (unused_block_broadcaster_tx, unused_block_broadcaster_rx) = make_channel(CHAN_DEPTH);
+        let (staging_tx, staging_rx) = make_channel(CHAN_DEPTH);
+        let (unused_block_broadcaster_delivery_tx, unused_block_broadcaster_delivery_rx) = make_channel(CHAN_DEPTH);
+        let (logserver_tx, logserver_rx) = make_channel(CHAN_DEPTH);
+        let (client_reply_tx, client_reply_rx) = broadcast::channel(CHAN_DEPTH);
+        let (gc_tx, gc_rx) = make_channel(CHAN_DEPTH);
+        let (backfill_request_tx, backfill_request_rx) = make_channel(CHAN_DEPTH);
+        let (unused_backfill_request_tx, unused_backfill_request_rx) = make_channel(CHAN_DEPTH);
 
         let block_sequencer = BlockSequencer::new(
             worker_config.clone(), crypto.clone(),
@@ -160,11 +162,9 @@ impl PSLWorkerPerChain {
             chain_id,
         );
 
-        let block_broadcaster_client = Client::new_atomic(server_config.clone(), key_store.clone(), false, 0).into();
-
         let block_broadcaster = BlockBroadcaster::new(
             psl::worker::block_broadcaster::BroadcasterConfig::WorkerConfig(worker_config.clone()),
-            block_broadcaster_client,
+            client,
             psl::worker::block_broadcaster::BroadcastMode::StorageStar,
             true, false,
             block_broadcaster_rx,
@@ -187,7 +187,7 @@ impl PSLWorkerPerChain {
             RemoteStorageEngine {
                 config: server_config.clone(),
             },
-            1000
+            CHAN_DEPTH
         );
 
         let logserver = LogServer::new(
@@ -259,25 +259,26 @@ impl PSLWorkerPerChain {
                     warn!("Received store command for chain {}", _origin_id);
                     let value = CachedValue::new_with_seq_num(data, seq_num, BigInt::from(1));
 
-                    error!(">>>>>>> 1");
+                    let (_tx, _rx) = oneshot::channel();
+                    warn!("Sending self write op");
                     let _ = self.cache_manager_tx.send(SequencerCommand::SelfWriteOp { 
                         key: seq_num.to_be_bytes().to_vec(), value,
-                        seq_num_query: psl::worker::block_sequencer::BlockSeqNumQuery::DontBother
+                        seq_num_query: psl::worker::block_sequencer::BlockSeqNumQuery::WaitForSeqNum(_tx)
                     }).await;
 
+                    warn!("Sending force make new block");
                     let _ = self.cache_manager_tx.send(SequencerCommand::ForceMakeNewBlock).await;
 
-                    error!(">>>>>>> 2");
+                    warn!("Receiving client reply");
                     let _ = self.client_reply_rx.recv().await;
+                    warn!("Received client reply2");
+                    let _ = _rx.await;
 
-                    error!(">>>>>>> 3");
+                    warn!("Sending response");
                     let _ = tx.send(Ok(()));
-                    error!(">>>>>>> 4");
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
-                    warn!("Received read command for chain {}", origin_id);
                     self.handle_read_with_retries(origin_id, seq_num, tx).await;
-                    warn!("Read command for chain {} returned", origin_id);
                 },
                 _ => {
                     unimplemented!();
@@ -292,13 +293,13 @@ impl PSLWorkerPerChain {
     async fn handle_read_with_retries(&self, origin_id: u64, seq_num: u64, tx: oneshot::Sender<Result<Option<Vec<u8>>, PslError>>) {
         let mut retries = 0;
         loop {
+            warn!("Read value after {} retries", retries);
             let res = self.handle_read(origin_id, seq_num).await;
+            warn!("Read done");
+            
             if res.is_ok() {
                 tx.send(res).unwrap();
 
-                if retries > 0 {
-                    info!("Read value after {} retries", retries);
-                }
                 return;
             }
 
@@ -394,9 +395,10 @@ pub struct PSLWorker {
     server: Arc<Server<PinnedPSLWorkerServerContext>>,
     staging_txs: AtomicHashMap<u64, Sender<VoteWithSender>>,
     cmd_txs: HashMap<u64, mpsc::Sender<StorageCommand>>,
-    client_reply_rxs: HashMap<u64, mpsc::Receiver<u64>>,
     crypto_connector: CryptoServiceConnector,
     crypto: CryptoService,
+
+    all_clients: Vec<PinnedClient>,
 
 
 }
@@ -452,12 +454,18 @@ impl<'a> StorageBackend<'a> for PSLWorker {
         let og_config = config.worker_config.to_config();
         let og_config = AtomicConfig::new(og_config);
         let key_store = AtomicKeyStore::new(key_store);
-        let mut crypto_service = CryptoService::new(config.worker_config.worker_config.num_crypto_workers, key_store, og_config);
+        let mut crypto_service = CryptoService::new(config.worker_config.worker_config.num_crypto_workers, key_store.clone(), og_config);
         crypto_service.run();
 
         let crypto_connector = crypto_service.get_connector();
 
         // TODO: Prefill.
+
+        let mut all_clients = Vec::new();
+        for i in 0..10 {
+            let client = Client::new_atomic(config.server_config.clone(), key_store.clone(), false, i);
+            all_clients.push(client.into());
+        }
         
         Self {
             config: config.worker_config.clone(),
@@ -465,9 +473,9 @@ impl<'a> StorageBackend<'a> for PSLWorker {
             cmd_txs: HashMap::new(),
             server: Arc::new(Server::new_atomic(config.server_config.clone(), ctx, config.keystore.clone())),
             staging_txs,
-            client_reply_rxs: HashMap::new(),
             crypto_connector,
             crypto: crypto_service,
+            all_clients,
         }
     }
 
@@ -477,6 +485,7 @@ impl<'a> StorageBackend<'a> for PSLWorker {
             let _ = Server::<PinnedPSLWorkerServerContext>::run(server).await;
         });
         while let Some(cmd) = self.cmd_rx.recv().await {
+            warn!("Received command. Pending commands: {}", self.cmd_rx.len());
             match cmd {
                 StorageCommand::Store(origin_id, seq_num, data, tx) => {
                     let res = self.store(origin_id, seq_num, data).await;
@@ -499,21 +508,23 @@ impl<'a> StorageBackend<'a> for PSLWorker {
         if !staging_txs.contains_key(&origin_id) {
             // This is super inefficient.
             warn!("Creating new staging tx for chain {}", origin_id);
-            let (tx, rx) = make_channel(1000);
+            let (tx, rx) = make_channel(CHAN_DEPTH);
             let mut staging_txs = HashMap::from_iter(staging_txs.iter().map(|(k, v)| (k.clone(), v.clone())));
             staging_txs.insert(origin_id, tx);
             self.staging_txs.set(Box::new(staging_txs));
 
-            let (cmd_tx, cmd_rx) = mpsc::channel(1000);
+            let (cmd_tx, cmd_rx) = mpsc::channel(CHAN_DEPTH);
             self.cmd_txs.insert(origin_id, cmd_tx);
 
             let mut worker = PSLWorkerPerChain::new(
                 origin_id,
                 self.config.clone(),
+                self.all_clients[origin_id as usize % self.all_clients.len()].clone(),
                 rx,
                 cmd_rx,
                 self.crypto_connector.clone(),
             ).await;
+            warn!("Spawning worker for chain {}", origin_id);
             tokio::spawn(async move {
                 worker.run().await;
             });
@@ -521,15 +532,17 @@ impl<'a> StorageBackend<'a> for PSLWorker {
 
         let cmd_tx = self.cmd_txs.get(&origin_id).unwrap();
 
+        warn!("Sending store command to worker for chain {}", origin_id);
         let (resp_tx, resp_rx) = oneshot::channel();
         cmd_tx.send(StorageCommand::Store(origin_id, seq_num, data, resp_tx)).await.expect("Channel send error");
 
+        warn!("Waiting for response from worker for chain {}", origin_id);
         let resp = resp_rx.await.expect("Channel send error");
+        warn!("Received response from worker for chain {}", origin_id);
         resp
     }
 
     async fn read(&mut self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
-        warn!("Reading from chain {} {}", origin_id, seq_num);
         let staging_txs = self.staging_txs.get();
         if !staging_txs.contains_key(&origin_id) {
             return Err(PslError::Storage(format!("No staging tx for chain {}", origin_id)));
