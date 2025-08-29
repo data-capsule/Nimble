@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tracing::error;
+use tracing::warn;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
@@ -67,18 +69,22 @@ impl<'a> StorageBackend<'a> for InMemoryStorage {
             match cmd {
                 StorageCommand::Store(origin_id, seq_num, data, tx) => {
                     let _ = self.store(origin_id, seq_num, data).await;
-                    tx.send(Ok(())).unwrap();
+                    let _ = tx.send(Ok(()));
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
+                    warn!("Received read command for chain {}", origin_id);
                     let data = self.read(origin_id, seq_num).await;
-                    tx.send(data).unwrap();
+                    warn!("Read command for chain {} returned", origin_id);
+                    let _ = tx.send(data);
                 },
                 StorageCommand::HealthCheck(tx) => {
                     let data = self.health_check().await;
-                    tx.send(data).unwrap();
+                    let _ = tx.send(data);
                 },
             }
         }
+
+        error!("InMemoryStorage run loop ended");
     }
 }
 
@@ -152,6 +158,7 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
         for i in 0..self.num_tasks {
             let (resp_tx, resp_rx) = oneshot::channel();
             
+            warn!("Sending read command to backend {}", i);
             self.backend_txs[(_idx + i) % self.num_tasks].send(StorageCommand::Read(origin_id, seq_num, resp_tx)).await.unwrap();
             let data = resp_rx.await.unwrap().unwrap();
 

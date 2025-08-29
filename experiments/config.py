@@ -92,3 +92,4 @@ SSH_KEY_PATH = "/home/ubuntu/.ssh/id_ed25519" # this is the path to private key 
 PSL_LB_BIND_ADDR = "0.0.0.0:50051"
 PSL_LB_CONNECT_ADDR = "localhost:50051"
 SSH_IP_PSL_LB = "127.0.0.1"
+PSL_LB_WORKER_CONFIG_PATH = "/home/ubuntu/psl-cvm/configs/experiments/storage_sig_1/0/configs/node1_config.json"

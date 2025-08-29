@@ -71,12 +71,12 @@ impl<'a, T: StorageBackend<'a> + 'static> PslStorageCall for PslStorageCallServi
         request: Request<ReadRemoteReq>,
     ) -> Result<Response<ReadRemoteResp>, Status> {
         let req = request.into_inner();
-        debug!("ReadRemote called: origin_id={}, seq_num={}", req.origin_id, req.seq_num);
+        info!("ReadRemote called: origin_id={}, seq_num={}", req.origin_id, req.seq_num);
         
         // Retrieve the data
         match self.storage.read(req.origin_id, req.seq_num).await {
             Ok(Some(data)) => {
-                debug!("Successfully retrieved data for origin_id={}, seq_num={}, size={}", 
+                info!("Successfully retrieved data for origin_id={}, seq_num={}, size={}", 
                       req.origin_id, req.seq_num, data.len());
                 let response = ReadRemoteResp { data };
                 Ok(Response::new(response))

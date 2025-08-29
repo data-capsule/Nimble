@@ -256,8 +256,10 @@ impl PSLWorkerPerChain {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 StorageCommand::Store(_origin_id, seq_num, data, tx) => {
+                    warn!("Received store command for chain {}", _origin_id);
                     let value = CachedValue::new_with_seq_num(data, seq_num, BigInt::from(1));
 
+                    error!(">>>>>>> 1");
                     let _ = self.cache_manager_tx.send(SequencerCommand::SelfWriteOp { 
                         key: seq_num.to_be_bytes().to_vec(), value,
                         seq_num_query: psl::worker::block_sequencer::BlockSeqNumQuery::DontBother
@@ -265,18 +267,25 @@ impl PSLWorkerPerChain {
 
                     let _ = self.cache_manager_tx.send(SequencerCommand::ForceMakeNewBlock).await;
 
+                    error!(">>>>>>> 2");
                     let _ = self.client_reply_rx.recv().await;
 
-                    tx.send(Ok(())).unwrap();
+                    error!(">>>>>>> 3");
+                    let _ = tx.send(Ok(()));
+                    error!(">>>>>>> 4");
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
+                    warn!("Received read command for chain {}", origin_id);
                     self.handle_read_with_retries(origin_id, seq_num, tx).await;
+                    warn!("Read command for chain {} returned", origin_id);
                 },
                 _ => {
                     unimplemented!();
                 }
             }
         }
+
+        error!("PSLWorkerPerChain run loop ended");
     
     }
 
@@ -470,8 +479,8 @@ impl<'a> StorageBackend<'a> for PSLWorker {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 StorageCommand::Store(origin_id, seq_num, data, tx) => {
-                    let _ = self.store(origin_id, seq_num, data).await;
-                    tx.send(Ok(())).unwrap();
+                    let res = self.store(origin_id, seq_num, data).await;
+                    tx.send(res).unwrap();
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
                     let data = self.read(origin_id, seq_num).await;
@@ -489,8 +498,8 @@ impl<'a> StorageBackend<'a> for PSLWorker {
         let staging_txs = self.staging_txs.get();
         if !staging_txs.contains_key(&origin_id) {
             // This is super inefficient.
-
-            let (tx, mut rx) = make_channel(1000);
+            warn!("Creating new staging tx for chain {}", origin_id);
+            let (tx, rx) = make_channel(1000);
             let mut staging_txs = HashMap::from_iter(staging_txs.iter().map(|(k, v)| (k.clone(), v.clone())));
             staging_txs.insert(origin_id, tx);
             self.staging_txs.set(Box::new(staging_txs));
@@ -520,6 +529,7 @@ impl<'a> StorageBackend<'a> for PSLWorker {
     }
 
     async fn read(&mut self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
+        warn!("Reading from chain {} {}", origin_id, seq_num);
         let staging_txs = self.staging_txs.get();
         if !staging_txs.contains_key(&origin_id) {
             return Err(PslError::Storage(format!("No staging tx for chain {}", origin_id)));

@@ -4,14 +4,17 @@ from config import *
 
 # make sure to set the configuration in config.py
 
-CMD = "screen -d -m '" + NIMBLE_BIN_PATH
+CMD = "screen -d -m " + NIMBLE_BIN_PATH
 HAS_LB = LISTEN_IP_ENDPOINT_1 != LISTEN_IP_LOAD_BALANCER # if not the same, we assume 2 endpoints and a load balancer
 
 def setup_psl_lb():
-    psl_lb = ssh_cmd(SSH_IP_PSL_LB, CMD + "/psl_lb -a " + PSL_LB_BIND_ADDR)
+    psl_lb = ssh_cmd(SSH_IP_PSL_LB, CMD + "/psl_lb -a " + PSL_LB_BIND_ADDR + " -w " + PSL_LB_WORKER_CONFIG_PATH)
+
+    psl_lb = psl_lb.replace("screen -d -m ", "screen -d -m sh -c '")
+    psl_lb += " > /tmp/psl_lb.log 2>&1'"
 
     print(psl_lb)
-    # os.system(psl_lb)
+    os.system(psl_lb)
 
 
 def setup_main_endorsers():
@@ -79,9 +82,11 @@ def setup_coordinator(store):
     coordinator += ",http://" + LISTEN_IP_ENDORSER_3 + ":" + PORT_ENDORSER_3
     coordinator += "\" -l 60"
     coordinator += store
-    coordinator += " > /tmp/coordinator.log 2>&1'"
 
     coordinator = ssh_cmd(SSH_IP_COORDINATOR, coordinator)
+
+    coordinator = coordinator.replace("screen -d -m ", "screen -d -m sh -c '")
+    coordinator += " > /tmp/coordinator.log 2>&1'"
 
     print(coordinator)
     os.system(coordinator)
@@ -108,7 +113,11 @@ def setup_endpoints():
     endpoint1 += " -c \"http://" + LISTEN_IP_COORDINATOR + ":" + PORT_COORDINATOR + "\" -l 60"
     endpoint1 = ssh_cmd(SSH_IP_ENDPOINT_1, endpoint1)
 
+
+    endpoint1 = endpoint1.replace("screen -d -m ", "screen -d -m sh -c '")
+    endpoint1 += " > /tmp/endpoint1.log 2>&1'"
     print(endpoint1)
+
     os.system(endpoint1)
 
     if HAS_LB:
@@ -179,7 +188,7 @@ def kill_psl_lb():
     psl_lb = ssh_cmd(SSH_IP_PSL_LB, "pkill psl_lb")
 
     print(psl_lb)
-    # os.system(psl_lb)
+    os.system(psl_lb)
 
 
 def setup(store, sgx):

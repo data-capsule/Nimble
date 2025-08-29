@@ -150,8 +150,11 @@ impl PSLStorageConnector {
         idx: usize,
     ) -> Result<LedgerEntry, LedgerStoreError> {
         // let seq_num = idx + 1;
+        println!("!!!1 {}", idx);
         let mut entry = self._read_remote(handle, idx).await?;
+        println!("!!!2");
         let receipts = self._read_all_receipts(handle, idx).await?;
+        println!("!!!3");
         entry.receipts.merge_receipts(&receipts);
         Ok(entry)
     }
@@ -297,6 +300,7 @@ impl LedgerStore for PSLStorageConnector {
         idx: usize,
       ) -> Result<LedgerEntry, LedgerStoreError>
       {
+        println!(">>>>>>>>>>>>>> Reading handle {:?} by index {}", handle, idx);
         self.read_remote(handle, idx).await
       }
       async fn append_view_ledger(
@@ -323,6 +327,7 @@ impl LedgerStore for PSLStorageConnector {
       }
       async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>
       {
+        println!(">>>>>>>>>>>>>> Reading view ledger by index {}", idx);
         self.read_ledger_by_index(&self.view_handle, idx).await
       }
     

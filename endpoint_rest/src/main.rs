@@ -88,11 +88,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     None
   };
 
+  println!("Getting endpoint state");
+
   let endpoint_state = Arc::new(
     EndpointState::new(coordinator_hostname, pem, num_grpc_channels)
       .await
       .unwrap(),
   );
+
+  println!("Got endpoint state");
 
   // Build our application by composing routes
   let app = Router::new()
