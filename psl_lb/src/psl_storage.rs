@@ -4,20 +4,24 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
+use num_bigint::BigInt;
 use psl::crypto::{CryptoService, CryptoServiceConnector, KeyStore};
-use psl::proto::checkpoint::ProtoBackfillQuery;
+use psl::proto::checkpoint::{ProtoAuthSenderType, ProtoBackfillQuery};
+use psl::proto::consensus::{ProtoAppendEntries, ProtoBlock};
+use psl::proto::execution::ProtoTransactionOpType;
 use psl::rpc::client::Client;
 use psl::storage_server::logserver::LogServer;
 use psl::utils::channel::{make_channel, Receiver};
-use psl::utils::{AtomicStruct, RemoteStorageEngine, StorageService};
+use psl::utils::{deserialize_proto_block, AtomicStruct, RemoteStorageEngine, StorageService};
 use psl::worker::block_broadcaster::BlockBroadcaster;
 use psl::worker::block_sequencer::{BlockSequencer, SequencerCommand};
-use psl::worker::cache_manager::CacheCommand;
+use psl::worker::cache_manager::{CacheCommand, CachedValue};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
 use tonic::async_trait;
-use tracing::{debug, warn};
+use tracing::{debug, error, info, warn};
 use prost_new::Message as _;
 
 use psl::config::{AtomicPSLWorkerConfig, PSLWorkerConfig};
@@ -118,12 +122,13 @@ pub struct PSLWorkerPerChain {
     chain_id: u64,
     cmd_rx: mpsc::Receiver<StorageCommand>,
     cache_manager_tx: Sender<SequencerCommand>,
-    backfill_request_tx: Sender<ProtoBackfillQuery>,
+    backfill_request_tx: Sender<(ProtoBackfillQuery, oneshot::Sender<Option<ProtoAppendEntries>>)>,
     client_reply_rx: broadcast::Receiver<u64>,
     block_sequencer: Arc<Mutex<BlockSequencer>>,
     block_broadcaster: Arc<Mutex<BlockBroadcaster>>,
     staging: Arc<Mutex<Staging>>,
     logserver: Arc<Mutex<LogServer>>,
+    config: PSLWorkerConfig,
 }
 
 impl PSLWorkerPerChain {
@@ -145,6 +150,7 @@ impl PSLWorkerPerChain {
         let (client_reply_tx, client_reply_rx) = broadcast::channel(1000);
         let (gc_tx, gc_rx) = make_channel(1000);
         let (backfill_request_tx, backfill_request_rx) = make_channel(1000);
+        let (unused_backfill_request_tx, unused_backfill_request_rx) = make_channel(1000);
 
         let block_sequencer = BlockSequencer::new(
             worker_config.clone(), crypto.clone(),
@@ -167,7 +173,7 @@ impl PSLWorkerPerChain {
         );
 
         let staging = Staging::new(
-            worker_config.clone(), crypto.clone(),
+            worker_config.clone(), chain_id, crypto.clone(),
             vote_rx,
             staging_rx,
             unused_block_broadcaster_delivery_tx,
@@ -190,10 +196,12 @@ impl PSLWorkerPerChain {
             remote_storage.get_connector(crypto.clone()),
             gc_rx,
             logserver_rx,
-            backfill_request_rx,
+            unused_backfill_request_rx,
+            Some(backfill_request_rx),
         );
 
         tokio::spawn(async move {
+            let _tx = unused_backfill_request_tx.clone();
             loop {
                 tokio::select! {
                     _ = unused_block_broadcaster_rx.recv() => {
@@ -204,6 +212,7 @@ impl PSLWorkerPerChain {
                     }
                 }
             }
+
         });
         
         let worker = Self {
@@ -216,6 +225,7 @@ impl PSLWorkerPerChain {
             block_broadcaster: Arc::new(Mutex::new(block_broadcaster)),
             staging: Arc::new(Mutex::new(staging)),
             logserver: Arc::new(Mutex::new(logserver)),
+            config,
         };
 
         worker
@@ -225,6 +235,7 @@ impl PSLWorkerPerChain {
         let block_sequencer = self.block_sequencer.clone();
         let block_broadcaster = self.block_broadcaster.clone();
         let staging = self.staging.clone();
+        let logserver = self.logserver.clone();
 
         tokio::spawn(async move {
             BlockSequencer::run(block_sequencer).await;
@@ -238,13 +249,28 @@ impl PSLWorkerPerChain {
             Staging::run(staging).await;
         });
 
+        tokio::spawn(async move {
+            LogServer::run(logserver).await;
+        });
+
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
-                StorageCommand::Store(origin_id, seq_num, data, tx) => {
+                StorageCommand::Store(_origin_id, seq_num, data, tx) => {
+                    let value = CachedValue::new_with_seq_num(data, seq_num, BigInt::from(1));
+
+                    let _ = self.cache_manager_tx.send(SequencerCommand::SelfWriteOp { 
+                        key: seq_num.to_be_bytes().to_vec(), value,
+                        seq_num_query: psl::worker::block_sequencer::BlockSeqNumQuery::DontBother
+                    }).await;
+
+                    let _ = self.cache_manager_tx.send(SequencerCommand::ForceMakeNewBlock).await;
+
+                    let _ = self.client_reply_rx.recv().await;
+
                     tx.send(Ok(())).unwrap();
                 },
                 StorageCommand::Read(origin_id, seq_num, tx) => {
-                    tx.send(Ok(None)).unwrap();
+                    self.handle_read_with_retries(origin_id, seq_num, tx).await;
                 },
                 _ => {
                     unimplemented!();
@@ -252,6 +278,98 @@ impl PSLWorkerPerChain {
             }
         }
     
+    }
+
+    async fn handle_read_with_retries(&self, origin_id: u64, seq_num: u64, tx: oneshot::Sender<Result<Option<Vec<u8>>, PslError>>) {
+        let mut retries = 0;
+        loop {
+            let res = self.handle_read(origin_id, seq_num).await;
+            if res.is_ok() {
+                tx.send(res).unwrap();
+
+                if retries > 0 {
+                    info!("Read value after {} retries", retries);
+                }
+                return;
+            }
+
+            retries += 1;
+            if retries > 100 {
+                error!("Failed to read value after 100 retries");
+                tx.send(Err(PslError::Storage("Failed to read value".to_string()))).unwrap();
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    async fn handle_read(&self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
+        let my_name = self.config.net_config.name.clone();
+        let sub_id = origin_id;
+
+        let backfill_query = ProtoBackfillQuery {
+            reply_name: my_name.clone(),
+            origin: Some(ProtoAuthSenderType {
+                name: my_name,
+                sub_id,
+            }),
+            start_index: seq_num,
+            end_index: seq_num,
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.backfill_request_tx.send((backfill_query, resp_tx)).await.expect("Channel send error");
+
+        let resp = match resp_rx.await {
+            Ok(Some(resp)) => {
+                resp
+            },
+            val @ _ => {
+                return Err(PslError::Storage("No response from logserver".to_string()));
+            }
+        };
+        
+
+        let Some(fork) = resp.fork else {
+            return Err(PslError::Storage("No fork from logserver".to_string()));
+        };
+
+        if fork.serialized_blocks.len() != 1 {
+            return Err(PslError::Storage("No block from logserver".to_string()));
+        }
+        let block = &fork.serialized_blocks[0];
+        let Ok(block) = deserialize_proto_block(&block.serialized_body) else {
+            return Err(PslError::Storage("Failed to decode block".to_string()));
+        };
+
+        // There is only one Write Tx with the value that I want.
+        if block.tx_list.len() != 1 {
+            return Ok(None);
+        }
+
+        let transaction = &block.tx_list[0];
+        let Some(phase) = &transaction.on_crash_commit else {
+            return Err(PslError::Storage("No on-crash commit".to_string()));
+        };
+
+        if phase.ops.len() != 1 {
+            return Err(PslError::Storage("No ops".to_string()));
+        }
+
+        if phase.ops[0].op_type() != ProtoTransactionOpType::Write
+        || phase.ops[0].operands.len() < 2 {
+            return Err(PslError::Storage("No write tx".to_string()));
+        }
+
+        let value = phase.ops[0].operands[1].clone();
+        
+        // This is bincode serialized.
+        let Ok(value) = bincode::deserialize::<CachedValue>(&value) else {
+            return Err(PslError::Storage("Failed to deserialize value".to_string()));
+        };
+
+        Ok(Some(value.get_value()))
     }
 }
 
@@ -269,6 +387,8 @@ pub struct PSLWorker {
     cmd_txs: HashMap<u64, mpsc::Sender<StorageCommand>>,
     client_reply_rxs: HashMap<u64, mpsc::Receiver<u64>>,
     crypto_connector: CryptoServiceConnector,
+    crypto: CryptoService,
+
 
 }
 
@@ -338,10 +458,15 @@ impl<'a> StorageBackend<'a> for PSLWorker {
             staging_txs,
             client_reply_rxs: HashMap::new(),
             crypto_connector,
+            crypto: crypto_service,
         }
     }
 
     async fn run(&mut self) {
+        let server = self.server.clone();
+        tokio::spawn(async move {
+            let _ = Server::<PinnedPSLWorkerServerContext>::run(server).await;
+        });
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 StorageCommand::Store(origin_id, seq_num, data, tx) => {

@@ -23,6 +23,8 @@ prost-new = { version = "0.14.1", package = "prost" }
 prost-new-types = { version = "0.14.1", package = "prost-types" }
 
 psl = { git = "https://github.com/data-capsule/psl-cvm.git", branch = "psl" }
+num-bigint = "0.4.6"
+bincode = "1.3.3"
 
 [build-dependencies]
 tonic-build = "0.8.2"
