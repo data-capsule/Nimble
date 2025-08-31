@@ -264,7 +264,7 @@ impl PSLWorkerPerChain {
 
                     let _ = self.cache_manager_tx.send((SequencerCommand::ForceMakeNewBlock, origin_id)).await;
 
-                    let _ = self.client_reply_rx.recv().await;
+                    let _resp = self.client_reply_rx.recv().await;
                     let _ = _rx.await;
                     let _ = tx.send(Ok(()));
                 },

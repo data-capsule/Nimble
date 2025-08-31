@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
 
 use psl::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
-use tracing::warn;
+use tracing::{debug, warn};
 
 pub type VoteWithSenderAndChainId = (SenderType, u64, ProtoVote);
 
@@ -112,13 +112,11 @@ impl MultiplexedStaging {
     }
 
     fn get_commit_threshold(&self) -> usize {
-        1
-
-        // let n = self.config.get().worker_config.storage_list.len() as usize;
-        // if n == 0 {
-        //     return 0;
-        // }
-        // n / 2 + 1
+        let n = self.config.get().worker_config.storage_list.len() as usize;
+        if n == 0 {
+            return 0;
+        }
+        n / 2 + 1
     }
 
     fn try_commit_blocks(&mut self, chain_id: u64) -> u64 {
@@ -151,7 +149,7 @@ impl MultiplexedStaging {
             } 
         }
 
-        warn!("Try commit blocks: chain_id={}, new_ci={}", chain_id, new_ci);
+        debug!("Try commit blocks: chain_id={}, new_ci={}", chain_id, new_ci);
 
         new_ci
     }
