@@ -295,6 +295,8 @@ async fn read_counter(
     signature: base64_url::encode(&signature),
   };
 
+  println!("Read counter: {:?}", resp);
+
   (StatusCode::OK, Json(json!(resp)))
 }
 

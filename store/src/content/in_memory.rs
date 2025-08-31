@@ -36,6 +36,7 @@ impl ContentStore for InMemoryContentStore {
   }
 
   async fn get(&self, handle: &Handle) -> Result<Vec<u8>, StorageError> {
+    println!("Get query: handle={:?}", handle);
     if let Ok(map) = self.data.read() {
       match map.get(handle) {
         None => Err(StorageError::KeyDoesNotExist),

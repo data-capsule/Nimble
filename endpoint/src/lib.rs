@@ -214,21 +214,15 @@ impl EndpointState {
     // initialize id and vs
     let (id, vs) = {
       let mut vs = VerifierState::default();
-      println!("1");
       let (block, _r) = conn.read_view_by_index(1usize).await.unwrap();
-      println!("2");
       // the hash of the genesis block of the view ledger uniquely identifies a particular instance of NimbleLedger
       let id = Block::from_bytes(&block).unwrap().hash();
       vs.set_group_identity(id);
-      println!("3");
       let (block, receipts, height, attestations) = conn.read_view_tail().await.unwrap();
-      println!("4");
       let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
       assert!(res.is_ok());
       for index in (1..height).rev() {
-        println!("5 {}", index);
         let (block, receipts) = conn.read_view_by_index(index).await.unwrap();
-        println!("6 {}", index);
         let res = vs.apply_view_change(&block, &receipts, None);
         assert!(res.is_ok());
       }

@@ -11,7 +11,7 @@ dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
 EXP_NAME = "fig-3a-" + dt_string
 NUM_ITERATIONS = 1
-LOAD = [5000]  #[5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
+LOAD = [50]  #[5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
 # LOAD = [5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
 
 def run_3a(time, op, out_folder):

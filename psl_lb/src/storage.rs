@@ -131,9 +131,7 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
         let mut resp_rxs = Vec::new();
         for tx in self.backend_txs.iter() {
             let (resp_tx, resp_rx) = oneshot::channel();
-            warn!(">>>> storing to backend");
             tx.send(StorageCommand::Store(origin_id, seq_num, data.clone(), resp_tx)).await.unwrap();
-            warn!(">>>> stored to backend");
             resp_rxs.push(resp_rx);
         }
 
@@ -142,10 +140,8 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
 
 
         while votes < max(self.num_tasks / 2, 1) {
-            warn!(">>>> waiting for response");
             let rx = resp_rxs.pop().unwrap();
             let _ = rx.await.unwrap();
-            warn!(">>>> got response");
             votes += 1;
         }
 
@@ -159,6 +155,7 @@ impl<'a, T: StorageBackend<'a>> StorageManager<'a, T>
     pub async fn read(&self, origin_id: u64, seq_num: u64) -> Result<Option<Vec<u8>>, PslError> {
         // Read command gets forwarded to one backend only, in most cases.
         // But since we only wait for majority responses while writing, we may be unfortunate in a reading before writing case.
+        warn!("Read query: origin_id={}, seq_num={}", origin_id, seq_num);
 
         let _idx = self.__rr_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         for i in 0..self.num_tasks {
