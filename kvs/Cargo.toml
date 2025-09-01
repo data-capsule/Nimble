@@ -1,0 +1,18 @@
+[package]
+name = "kvs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+eth_trie = "0.6.1"
+memorydb = "0.3.0"
+tokio = { version = "1.14.0", features = ["full"] }
+psl = { git = "https://github.com/data-capsule/psl-cvm.git", branch = "psl" }
+prost = "0.14.1"
+prost-types = "0.14.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
