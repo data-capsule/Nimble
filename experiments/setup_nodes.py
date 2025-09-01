@@ -192,7 +192,7 @@ def kill_psl_lb():
 
 
 def setup(store, sgx):
-    setup_psl_lb()
+    # setup_psl_lb()
     if sgx:
         setup_sgx_endorsers()
         setup_coordinator_sgx(store)
@@ -209,7 +209,7 @@ def teardown(sgx):
         kill_sgx_endorsers()
     else:
         kill_endorsers()
-    kill_psl_lb()
+    # kill_psl_lb()
 
 def ssh_cmd(ip, cmd):
     if LOCAL_RUN:

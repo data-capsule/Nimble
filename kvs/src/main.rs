@@ -123,7 +123,7 @@ pub struct NimbleKVSNode {
 const NUM_CLIENT_REPLY_HANDLERS: usize = 20;
 
 impl NimbleKVSNode {
-  pub fn new(config: AtomicConfig, keystore: AtomicKeyStore) -> Self {
+  pub fn new(config: AtomicConfig, keystore: AtomicKeyStore, nimble_endpoint_url: String) -> Self {
     let chan_depth = config.get().rpc_config.channel_depth as usize;
     let (batch_proposal_tx, batch_proposal_rx) = make_channel(chan_depth);
     let (reply_tx, reply_rx) = make_channel(chan_depth);
@@ -138,7 +138,7 @@ impl NimbleKVSNode {
     }
     
     let kvs_manager = Arc::new(Mutex::new(KVSManager::new(config.clone(), batch_proposal_rx, reply_tx, nimble_tx)));
-    let nimble_client = Arc::new(Mutex::new(NimbleClient::new(config.clone(), nimble_rx)));
+    let nimble_client = Arc::new(Mutex::new(NimbleClient::new(config.clone(), keystore.clone(), nimble_endpoint_url, nimble_rx)));
 
     Self {
       config,
@@ -185,6 +185,10 @@ struct Args {
     /// Path to the JSON configuration file
     #[arg(short, long)]
     config: String,
+
+    /// HTTP Endpoint for Nimble.
+    #[arg(short, long)]
+    nimble_endpoint_url: String,
 }
 
 #[tokio::main]
@@ -220,7 +224,7 @@ async fn main() -> Result<()> {
     info!("Creating NimbleKVSNode...");
     
     // Create the NimbleKVSNode
-    let node = NimbleKVSNode::new(atomic_config, atomic_keystore);
+    let node = NimbleKVSNode::new(atomic_config, atomic_keystore, args.nimble_endpoint_url);
     
     info!("Starting NimbleKVSNode...");
     

@@ -1,6 +1,6 @@
-use psl::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::{make_channel, Receiver, Sender}, worker::TxWithAckChanTag};
+use psl::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, crypto::HashType, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::{make_channel, Receiver, Sender}, worker::TxWithAckChanTag};
 use tokio::sync::{oneshot, Mutex};
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 use std::sync::Arc;
 use eth_trie::{MemoryDB, EthTrie, Trie};
 
@@ -10,7 +10,7 @@ pub struct KVSManager {
     store: EthTrie<MemoryDB>,
     batch_proposal_rx: Receiver<TxWithAckChanTag>,
     reply_tx: Sender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>,
-    nimble_tx: Sender<(Sender<()>, (Vec<u8>, Vec<u8>))>,
+    nimble_tx: Sender<(Sender<()>, Vec<u8>)>,
 }
 
 impl KVSManager {
@@ -18,7 +18,7 @@ impl KVSManager {
         config: AtomicConfig,
         batch_proposal_rx: Receiver<TxWithAckChanTag>,
         reply_tx: Sender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>,
-        nimble_tx: Sender<(Sender<()>, (Vec<u8>, Vec<u8>))>,
+        nimble_tx: Sender<(Sender<()>, HashType)>,
     ) -> Self {
 
         let store = EthTrie::new(Arc::new(MemoryDB::new(false)));
@@ -66,10 +66,11 @@ impl KVSManager {
         match op.op_type() {
             ProtoTransactionOpType::Write => {
                 let (_tx, _rx) = make_channel(1);
-                let resp = self.nimble_tx.send((_tx, (op.operands[0].clone(), op.operands[1].clone()))).await;
-                debug!("KVSManager worker: sent message to nimble client: {:?}", resp);
+                let _ = self.store.insert(&op.operands[0], &op.operands[1]);
+
+                let root_hash = self.store.root_hash().unwrap().to_vec();
+                let _resp = self.nimble_tx.send((_tx, root_hash)).await;
                 
-                self.store.insert(&op.operands[0], &op.operands[1]);
                 (ProtoTransactionOpResult { success: true, values: vec![] }, Some(_rx))
             },
             ProtoTransactionOpType::Read => {
