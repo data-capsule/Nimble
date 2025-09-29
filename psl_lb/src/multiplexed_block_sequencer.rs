@@ -101,15 +101,16 @@ impl MultiplexedBlockSequencer {
                 self.curr_vector_clock.entry(chain_id).or_insert(VectorClock::new()).advance(sender, block_seq_num);
                 self.flush_vc_wait_buffer(chain_id).await;
             },
-            SequencerCommand::MakeNewBlock => {
+            SequencerCommand::MakeNewBlock(_, _, _) => {
                 self.maybe_prepare_new_block(chain_id).await;
             },
             SequencerCommand::ForceMakeNewBlock => {
                 self.force_prepare_new_block(chain_id).await;
             },
-            SequencerCommand::WaitForVC(vc, sender) => {
+            SequencerCommand::WaitForVC(vc, sender, _) => {
                 self.buffer_vc_wait(vc, sender, chain_id).await;
-            }
+            },
+            _ => { /* ignore */ }
         }
     }
 
@@ -223,7 +224,8 @@ impl MultiplexedBlockSequencer {
             sig: None,
             vector_clock,
             origin,
-            chain_id, // This field is generally unused.
+            chain_id,
+            read_set: None, // This field is generally unused.
         }
     }
 
@@ -233,7 +235,16 @@ impl MultiplexedBlockSequencer {
         for (key, value) in vec {
             let entry = seen.entry(key).or_insert(value.clone());
 
-            entry.merge_cached(value);
+            match entry {
+                CachedValue::DWW(dww_val) => {
+                    dww_val.merge_cached(value.get_dww().unwrap().clone());
+                },
+                CachedValue::PNCounter(pn_counter_val) => {
+                    pn_counter_val.merge(value.get_pn_counter().unwrap().clone());
+                }
+            }
+
+            // let _ = entry.merge_cached(value);
         }
 
         seen.into_iter().collect()

@@ -254,7 +254,7 @@ impl PSLWorkerPerChain {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 StorageCommand::Store(origin_id, seq_num, data, tx) => {
-                    let value = CachedValue::new_with_seq_num(data, seq_num, BigInt::from(1));
+                    let value = CachedValue::new_dww_with_seq_num(data, seq_num, BigInt::from(1));
 
                     let (_tx, _rx) = oneshot::channel();
                     let _ = self.cache_manager_tx.send((SequencerCommand::SelfWriteOp { 
@@ -368,7 +368,7 @@ impl PSLWorkerPerChain {
             return Err(PslError::Storage("Failed to deserialize value".to_string()));
         };
 
-        Ok(Some(value.get_value()))
+        Ok(Some(value.get_dww().unwrap().get_value()))
     }
 }
 
