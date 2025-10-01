@@ -41,6 +41,8 @@ impl ClientReplyHandler {
             _results.push(result);
         }
 
+        tracing::info!("Handling reply for {:?} for tag {}", _sender, client_tag);
+
         let reply = ProtoClientReply {
             client_tag,
             reply: Some(Reply::Receipt(ProtoTransactionReceipt {
@@ -61,7 +63,7 @@ impl ClientReplyHandler {
 
         let profile = LatencyProfile::new();
         
-        let _ = ack_chan.send((msg.clone(), profile)).await;
+        let _ = ack_chan.send((msg, profile)).await;
         
     }
 }
