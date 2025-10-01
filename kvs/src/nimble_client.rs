@@ -8,13 +8,13 @@ use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 pub struct NimbleClient {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
-    nimble_rx: Receiver<(Sender<()>, Vec<u8>)>,
+    nimble_rx: Receiver<(tokio::sync::oneshot::Sender<()>, Vec<u8>)>,
     nimble_endpoint_url: String,
 
     current_hash: HashType,
     current_counter: usize,
     buffered_ops: usize,
-    buffered_replies: Vec<Sender<()>>,
+    buffered_replies: Vec<tokio::sync::oneshot::Sender<()>>,
 
     handle: String,
     client: reqwest::Client,
@@ -50,7 +50,7 @@ impl NimbleClient {
     pub fn new(
         config: AtomicConfig, keystore: AtomicKeyStore,
         nimble_endpoint_url: String,
-        nimble_rx: Receiver<(Sender<()>, Vec<u8>)>
+        nimble_rx: Receiver<(tokio::sync::oneshot::Sender<()>, Vec<u8>)>
     ) -> Self {
         let my_name = &config.get().net_config.name;
         let pub_key = keystore.get().get_pubkey(my_name).unwrap().clone();
@@ -138,7 +138,7 @@ impl NimbleClient {
 
     async fn clear_buffered_replies(&mut self) {
         for reply in self.buffered_replies.drain(..) {
-            let _ = reply.send(()).await;
+            let _ = reply.send(());
         }
     }
 

@@ -9,8 +9,8 @@ pub struct KVSManager {
     config: AtomicConfig,
     store: EthTrie<MemoryDB>,
     batch_proposal_rx: Receiver<TxWithAckChanTag>,
-    reply_txs: Vec<tokio::sync::mpsc::UnboundedSender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>>,
-    nimble_tx: Sender<(Sender<()>, Vec<u8>)>,
+    reply_txs: Vec<tokio::sync::mpsc::UnboundedSender<(Vec<(ProtoTransactionOpResult, Option<tokio::sync::oneshot::Receiver<()>>)>, MsgAckChanWithTag)>>,
+    nimble_tx: Sender<(tokio::sync::oneshot::Sender<()>, Vec<u8>)>,
 
     __rr_cnt: usize,
 }
@@ -19,8 +19,8 @@ impl KVSManager {
     pub fn new(
         config: AtomicConfig,
         batch_proposal_rx: Receiver<TxWithAckChanTag>,
-        reply_txs: Vec<tokio::sync::mpsc::UnboundedSender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>>,
-        nimble_tx: Sender<(Sender<()>, HashType)>,
+        reply_txs: Vec<tokio::sync::mpsc::UnboundedSender<(Vec<(ProtoTransactionOpResult, Option<tokio::sync::oneshot::Receiver<()>>)>, MsgAckChanWithTag)>>,
+        nimble_tx: Sender<(tokio::sync::oneshot::Sender<()>, HashType)>,
     ) -> Self {
 
         let store = EthTrie::new(Arc::new(MemoryDB::new(false)));
@@ -67,10 +67,10 @@ impl KVSManager {
 
     }
 
-    async fn process_op(&mut self, op: &ProtoTransactionOp) -> (ProtoTransactionOpResult, Option<Receiver<()>>) {
+    async fn process_op(&mut self, op: &ProtoTransactionOp) -> (ProtoTransactionOpResult, Option<tokio::sync::oneshot::Receiver<()>>) {
         match op.op_type() {
             ProtoTransactionOpType::Write => {
-                let (_tx, _rx) = make_channel(1);
+                let (_tx, _rx) = tokio::sync::oneshot::channel();
                 // let _ = self.store.insert(&op.operands[0], &op.operands[1])
                 // let root_hash = self.store.root_hash().unwrap().to_vec();
                 let hsh = op.operands[0].clone();

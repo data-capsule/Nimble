@@ -6,11 +6,11 @@ use prost::Message as _;
 
 pub struct ClientReplyHandler {
     config: AtomicConfig,
-    reply_rx: tokio::sync::mpsc::UnboundedReceiver<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>,
+    reply_rx: tokio::sync::mpsc::UnboundedReceiver<(Vec<(ProtoTransactionOpResult, Option<tokio::sync::oneshot::Receiver<()>>)>, MsgAckChanWithTag)>,
 }
 
 impl ClientReplyHandler {
-    pub fn new(config: AtomicConfig, reply_rx: tokio::sync::mpsc::UnboundedReceiver<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>) -> Self {
+    pub fn new(config: AtomicConfig, reply_rx: tokio::sync::mpsc::UnboundedReceiver<(Vec<(ProtoTransactionOpResult, Option<tokio::sync::oneshot::Receiver<()>>)>, MsgAckChanWithTag)>) -> Self {
         Self { config, reply_rx }
     }
 
@@ -29,13 +29,13 @@ impl ClientReplyHandler {
         }
     }
 
-    async fn handle_reply(reply: (Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)) {
+    async fn handle_reply(reply: (Vec<(ProtoTransactionOpResult, Option<tokio::sync::oneshot::Receiver<()>>)>, MsgAckChanWithTag)) {
         let mut _results = Vec::new();
         
         let (results, (ack_chan, client_tag, _sender)) = reply;
         for (result, rx) in results {
             if let Some(rx) = rx {
-                let _ = rx.recv().await;
+                let _ = rx.await;
             }
 
             _results.push(result);
