@@ -26,7 +26,7 @@ pub struct NimbleClient {
 #[derive(bincode::Encode)]
 struct NimblePayload {
     counter: usize,
-    state_hash: [u8; 32],
+    state_hash: Vec<u8>,
 }
 
 
