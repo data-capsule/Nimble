@@ -136,7 +136,7 @@ impl NimbleClient {
         self.buffered_ops = 0;
         self.last_batch_time = Instant::now();
 
-        info!("Proposed new counter: {}", self.current_counter);
+        // info!("Proposed new counter: {}", self.current_counter);
     }
 
     async fn clear_buffered_replies(&mut self) {
