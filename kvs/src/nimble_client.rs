@@ -125,7 +125,7 @@ impl NimbleClient {
         tag.extend_from_slice(&payload_bytes);
         tag.extend_from_slice(&payload_signature);
 
-        self.send_to_nimble(tag).await;
+        // self.send_to_nimble(tag).await;
 
 
         self.clear_buffered_replies().await;
