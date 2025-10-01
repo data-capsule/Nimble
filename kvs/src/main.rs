@@ -97,9 +97,9 @@ impl ServerContextType for PinnedNimbleKVServerContext {
         match msg {
             psl::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
                 let client_tag = proto_client_request.client_tag;
+                tracing::info!("Proposal from {:?}", sender);
                 self.batch_proposal_tx.send((proto_client_request.tx, (ack_chan, client_tag, sender))).await
                     .expect("Channel send error");
-
                 return Ok(RespType::Resp);
             },
             _ => {
