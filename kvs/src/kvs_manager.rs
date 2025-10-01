@@ -9,15 +9,17 @@ pub struct KVSManager {
     config: AtomicConfig,
     store: EthTrie<MemoryDB>,
     batch_proposal_rx: Receiver<TxWithAckChanTag>,
-    reply_tx: Sender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>,
+    reply_txs: Vec<tokio::sync::mpsc::UnboundedSender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>>,
     nimble_tx: Sender<(Sender<()>, Vec<u8>)>,
+
+    __rr_cnt: usize,
 }
 
 impl KVSManager {
     pub fn new(
         config: AtomicConfig,
         batch_proposal_rx: Receiver<TxWithAckChanTag>,
-        reply_tx: Sender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>,
+        reply_txs: Vec<tokio::sync::mpsc::UnboundedSender<(Vec<(ProtoTransactionOpResult, Option<Receiver<()>>)>, MsgAckChanWithTag)>>,
         nimble_tx: Sender<(Sender<()>, HashType)>,
     ) -> Self {
 
@@ -26,8 +28,10 @@ impl KVSManager {
             config,
             store,
             batch_proposal_rx,
-            reply_tx,
+            reply_txs,
             nimble_tx,
+
+            __rr_cnt: 0,
         }
     }
 
@@ -56,7 +60,8 @@ impl KVSManager {
             results.push(self.process_op(op).await);
         }
 
-        self.reply_tx.send((results, ack_chan)).await;
+        let _ = self.reply_txs[self.__rr_cnt].send((results, ack_chan));
+        self.__rr_cnt = (self.__rr_cnt + 1) % self.reply_txs.len();
 
         Some(())
 

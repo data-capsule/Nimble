@@ -126,18 +126,21 @@ impl NimbleKVSNode {
   pub fn new(config: AtomicConfig, keystore: AtomicKeyStore, nimble_endpoint_url: String) -> Self {
     let chan_depth = config.get().rpc_config.channel_depth as usize;
     let (batch_proposal_tx, batch_proposal_rx) = make_channel(chan_depth);
-    let (reply_tx, reply_rx) = make_channel(chan_depth);
+    // let (reply_tx, reply_rx) = make_channel(chan_depth);
     let (nimble_tx, nimble_rx) = make_channel(chan_depth);
     
     let ctx = PinnedNimbleKVServerContext::new(keystore.clone(), batch_proposal_tx);
     let server = Arc::new(Server::new_atomic(config.clone(), ctx, keystore.clone()));
 
     let mut client_reply_handlers = Vec::new();
+    let mut reply_txs = Vec::new();
     for _ in 0..NUM_CLIENT_REPLY_HANDLERS {
-      client_reply_handlers.push(Arc::new(Mutex::new(ClientReplyHandler::new(config.clone(), reply_rx.clone()))));
+        let (reply_tx, reply_rx) = tokio::sync::mpsc::unbounded_channel();
+        client_reply_handlers.push(Arc::new(Mutex::new(ClientReplyHandler::new(config.clone(), reply_rx))));
+        reply_txs.push(reply_tx.clone());
     }
     
-    let kvs_manager = Arc::new(Mutex::new(KVSManager::new(config.clone(), batch_proposal_rx, reply_tx, nimble_tx)));
+    let kvs_manager = Arc::new(Mutex::new(KVSManager::new(config.clone(), batch_proposal_rx, reply_txs, nimble_tx)));
     let nimble_client = Arc::new(Mutex::new(NimbleClient::new(config.clone(), keystore.clone(), nimble_endpoint_url, nimble_rx)));
 
     Self {
