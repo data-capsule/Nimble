@@ -96,10 +96,10 @@ impl NimbleClient {
             }
 
             let batch_size = 1; client.config.get().consensus_config.max_backlog_batch_size;
-            let batch_timeout = client.config.get().consensus_config.batch_max_delay_ms as u128;
+            // let batch_timeout = client.config.get().consensus_config.batch_max_delay_ms as u128;
 
             if client.buffered_ops >= batch_size
-            || (client.last_batch_time.elapsed().as_millis() >= batch_timeout && client.buffered_replies.len() > 0)
+            // || (client.last_batch_time.elapsed().as_millis() >= batch_timeout && client.buffered_replies.len() > 0)
             {
                 client.current_counter += 1;
                 client.propose_new_counter().await;
