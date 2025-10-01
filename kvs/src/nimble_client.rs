@@ -59,7 +59,10 @@ impl NimbleClient {
         let handle = hash(&handle_bytes);
         let handle = URL_SAFE.encode(handle.as_slice());
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(16)
+            .build()
+            .unwrap();
 
         let batch_timer = ResettableTimer::new(Duration::from_millis(config.get().consensus_config.batch_max_delay_ms));
         
