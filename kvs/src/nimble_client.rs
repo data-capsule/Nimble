@@ -95,7 +95,7 @@ impl NimbleClient {
                 }    
             }
 
-            let batch_size = client.config.get().consensus_config.max_backlog_batch_size;
+            let batch_size = 1; client.config.get().consensus_config.max_backlog_batch_size;
             let batch_timeout = client.config.get().consensus_config.batch_max_delay_ms as u128;
 
             if client.buffered_ops >= batch_size

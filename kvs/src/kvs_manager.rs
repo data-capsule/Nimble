@@ -66,20 +66,20 @@ impl KVSManager {
         match op.op_type() {
             ProtoTransactionOpType::Write => {
                 let (_tx, _rx) = make_channel(1);
-                let _ = self.store.insert(&op.operands[0], &op.operands[1]);
-
-                let root_hash = self.store.root_hash().unwrap().to_vec();
-                let _resp = self.nimble_tx.send((_tx, root_hash)).await;
+                // let _ = self.store.insert(&op.operands[0], &op.operands[1])
+                // let root_hash = self.store.root_hash().unwrap().to_vec();
+                let hsh = op.operands[0].clone();
+                let _resp = self.nimble_tx.send((_tx, hsh)).await;
                 
                 (ProtoTransactionOpResult { success: true, values: vec![] }, Some(_rx))
             },
-            ProtoTransactionOpType::Read => {
-                let Ok(Some(value)) = self.store.get(&op.operands[0]) else {
-                    trace!("KVSManager worker: read operation failed: {:?}", op.operands[0]);
-                    return (ProtoTransactionOpResult { success: false, values: vec![] }, None);
-                };
-                (ProtoTransactionOpResult { success: true, values: vec![value] }, None)
-            },
+            // ProtoTransactionOpType::Read => {
+            //     let Ok(Some(value)) = self.store.get(&op.operands[0]) else {
+            //         trace!("KVSManager worker: read operation failed: {:?}", op.operands[0]);
+            //         return (ProtoTransactionOpResult { success: false, values: vec![] }, None);
+            //     };
+            //     (ProtoTransactionOpResult { success: true, values: vec![value] }, None)
+            // },
             _ => {
                 warn!("Unsupported operation: {:?}", op.op_type());
                 (ProtoTransactionOpResult { success: false, values: vec![] }, None)
